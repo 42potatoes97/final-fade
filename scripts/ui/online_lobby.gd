@@ -55,8 +55,7 @@ var ranked_find_btn: Button
 var ranked_cancel_btn: Button
 var ranked_region_btn: OptionButton
 var ranked_range_label: Label
-var api_token_field: LineEdit
-var auto_sync_check: CheckButton
+# API token and auto-sync removed — shared app token, always-on sync
 
 # --- Leaderboard widgets ---
 var lb_list_container: VBoxContainer
@@ -767,44 +766,6 @@ func _build_ranked_panel() -> VBoxContainer:
 	ranked_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	panel.add_child(ranked_status_label)
 
-	# Separator
-	var sep: HSeparator = HSeparator.new()
-	sep.add_theme_constant_override("separation", 8)
-	panel.add_child(sep)
-
-	# API Token section
-	var token_hbox: HBoxContainer = HBoxContainer.new()
-	token_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	token_hbox.add_theme_constant_override("separation", 10)
-	panel.add_child(token_hbox)
-
-	var token_prompt: Label = Label.new()
-	token_prompt.text = "API Token:"
-	token_prompt.add_theme_font_size_override("font_size", 16)
-	token_prompt.add_theme_color_override("font_color", Color(0.5, 0.5, 0.6))
-	token_hbox.add_child(token_prompt)
-
-	api_token_field = LineEdit.new()
-	api_token_field.secret = true
-	api_token_field.placeholder_text = "Enter token..."
-	api_token_field.custom_minimum_size = Vector2(220, 38)
-	api_token_field.add_theme_font_size_override("font_size", 16)
-	token_hbox.add_child(api_token_field)
-
-	var token_save_btn: Button = Button.new()
-	token_save_btn.text = "SAVE"
-	token_save_btn.custom_minimum_size = Vector2(80, 38)
-	token_save_btn.add_theme_font_size_override("font_size", 16)
-	token_save_btn.pressed.connect(_on_api_token_save_pressed)
-	token_hbox.add_child(token_save_btn)
-
-	# Auto-sync CheckButton
-	auto_sync_check = CheckButton.new()
-	auto_sync_check.text = "Auto-sync results after match"
-	auto_sync_check.add_theme_font_size_override("font_size", 16)
-	auto_sync_check.add_theme_color_override("font_color", Color(0.6, 0.6, 0.7))
-	panel.add_child(auto_sync_check)
-
 	return panel
 
 
@@ -913,10 +874,7 @@ func _on_ranked_status_changed(status: String):
 
 
 func _on_api_token_save_pressed():
-	if _ranked_config:
-		_ranked_config.web3_api_token = api_token_field.text
-		_ranked_config.save_config()
-		ranked_status_label.text = "API token saved!"
+	pass  # No longer needed — shared app token used automatically
 
 
 func _get_local_rating() -> int:
@@ -936,11 +894,8 @@ func _on_lb_sync_pressed():
 		_leaderboard_mgr.load_local_data()
 		_leaderboard_mgr.leaderboard_updated.connect(_on_leaderboard_updated)
 
-	if _ranked_config and _ranked_config.has_api_token():
-		_leaderboard_mgr.publish_proof_chain(_ranked_config.web3_api_token, self)
-		lb_status_label.text = "Syncing..."
-	else:
-		lb_status_label.text = "Set API token in RANKED tab first"
+	_leaderboard_mgr.publish_proof_chain(RankedConfig.APP_IPFS_TOKEN, self)
+	lb_status_label.text = "Syncing..."
 
 
 func _on_lb_refresh_pressed():

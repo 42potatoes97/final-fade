@@ -389,11 +389,10 @@ func _finalize_proof() -> void:
 	if _replay_manager and _pending_proof.has("replay"):
 		_replay_manager.analyze_in_background(_pending_proof["replay"], ProfileManager.profile_id)
 
-	# Auto-sync to leaderboard if config allows
+	# Auto-sync proof chain to leaderboard after every match
 	var config: RankedConfig = RankedConfig.new()
 	config.load_config()
-	if config.auto_sync and config.has_api_token():
-		_leaderboard.publish_proof_chain(config.web3_api_token, self)
+	_leaderboard.publish_proof_chain(config.get_api_token(), self)
 
 	_pending_proof = {}
 

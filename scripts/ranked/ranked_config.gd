@@ -2,14 +2,16 @@ class_name RankedConfig
 extends RefCounted
 
 ## Ranked system configuration stored at user://ranked_config.json.
-## Generates a w3name signing key on first load.
+## Auto-sync is always on. Shared app token for IPFS uploads (no user setup).
 
 const CONFIG_PATH: String = "user://ranked_config.json"
 
-var web3_api_token: String = ""
+# Shared app token for web3.storage — all players use this
+# Free tier: 5GB, enough for thousands of replay proof chains
+const APP_IPFS_TOKEN: String = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.finalfade-shared-token"
+
 var region: String = "NA"
-var auto_sync: bool = true
-var w3name_key: String = ""  # Base64-encoded 32-byte key
+var w3name_key: String = ""  # Base64-encoded 32-byte key for IPNS
 
 
 func load_config() -> void:
@@ -38,9 +40,7 @@ func load_config() -> void:
 
 	var data: Variant = json.data
 	if data is Dictionary:
-		web3_api_token = data.get("web3_api_token", "")
 		region = data.get("region", "NA")
-		auto_sync = data.get("auto_sync", true)
 		w3name_key = data.get("w3name_key", "")
 	else:
 		_generate_defaults()
@@ -56,9 +56,7 @@ func load_config() -> void:
 
 func save_config() -> void:
 	var data: Dictionary = {
-		"web3_api_token": web3_api_token,
 		"region": region,
-		"auto_sync": auto_sync,
 		"w3name_key": w3name_key,
 	}
 	var json_text: String = JSON.stringify(data, "\t")
@@ -71,8 +69,8 @@ func save_config() -> void:
 	file.close()
 
 
-func has_api_token() -> bool:
-	return not web3_api_token.is_empty()
+func get_api_token() -> String:
+	return APP_IPFS_TOKEN
 
 
 func get_region() -> String:
@@ -80,8 +78,6 @@ func get_region() -> String:
 
 
 func _generate_defaults() -> void:
-	web3_api_token = ""
 	region = "NA"
-	auto_sync = true
 	var crypto: Crypto = Crypto.new()
 	w3name_key = Marshalls.raw_to_base64(crypto.generate_random_bytes(32))
