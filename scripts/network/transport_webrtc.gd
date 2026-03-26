@@ -16,7 +16,7 @@ const STUN_CONFIG: Dictionary = {
 	]
 }
 
-const ROOM_ID_LENGTH: int = 8
+const ROOM_ID_LENGTH: int = 16
 const ROOM_ID_CHARS: String = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
 var signaling: SignalingClient

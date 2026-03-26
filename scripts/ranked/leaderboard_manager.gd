@@ -69,16 +69,25 @@ func add_proof(proof: Dictionary) -> void:
 	if not _local_proof_chain.has("proofs"):
 		_local_proof_chain["proofs"] = []
 
+	# Set prev_hash linking to the last proof in the chain
+	var existing_proofs: Array = _local_proof_chain["proofs"]
+	if existing_proofs.size() > 0:
+		proof["prev_hash"] = existing_proofs[existing_proofs.size() - 1].get("match_hash", "")
+	else:
+		proof["prev_hash"] = ""
+
 	_local_proof_chain["proofs"].append(proof)
 
 	# Recompute chain hash using the same pattern as MatchProof.build_proof_chain
-	var proof_hashes: String = ""
+	# (includes prev_hash links)
+	var hash_data: String = ""
 	for p in _local_proof_chain["proofs"]:
-		proof_hashes += p.get("match_hash", "")
+		hash_data += p.get("prev_hash", "")
+		hash_data += p.get("match_hash", "")
 
 	var ctx: HashingContext = HashingContext.new()
 	ctx.start(HashingContext.HASH_SHA256)
-	ctx.update(proof_hashes.to_utf8_buffer())
+	ctx.update(hash_data.to_utf8_buffer())
 	_local_proof_chain["chain_hash"] = ctx.finish().hex_encode()
 
 	save_local_data()
@@ -182,7 +191,26 @@ func _fetch_chains_sequential(
 					var chain: Dictionary = json.data
 					if MatchProof.verify_chain_integrity(chain):
 						var proofs: Array = chain.get("proofs", [])
-						all_proofs.append_array(proofs)
+						var now: float = Time.get_unix_time_from_system()
+						var max_age_sec: float = 90.0 * 24.0 * 3600.0  # 90 days
+						var max_future_sec: float = 3600.0  # 1 hour
+						for proof in proofs:
+							# Verify proof structure (hash, fields, types)
+							if not MatchProof.verify_proof_structure(proof):
+								continue
+							# Timestamp validation
+							var md: Dictionary = proof.get("match_data", {})
+							var ts_str: String = str(md.get("timestamp", ""))
+							if not ts_str.is_empty():
+								# Try to parse ISO timestamp to unix
+								var ts_dict = Time.get_datetime_dict_from_datetime_string(ts_str, false)
+								if not ts_dict.is_empty():
+									var ts_unix: float = Time.get_unix_time_from_datetime_dict(ts_dict)
+									if now - ts_unix > max_age_sec:
+										continue  # Older than 90 days
+									if ts_unix - now > max_future_sec:
+										continue  # More than 1 hour in the future
+							all_proofs.append(proof)
 
 			# Continue to next CID regardless of success/failure
 			_fetch_chains_sequential(cid_entries, index + 1, all_proofs, http_node)

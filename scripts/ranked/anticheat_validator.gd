@@ -5,9 +5,16 @@ extends RefCounted
 ## Periodic state hash exchange, input plausibility checks, and replay signing.
 
 const STATE_HASH_INTERVAL: int = 30
-const MAX_DESYNC_COUNT: int = 3
 const MAX_INPUT_RATE: int = 4
 const INPUT_CHECK_WINDOW: int = 10
+
+# Desync tolerance — sliding window ratio instead of simple counter
+# Legitimate packet loss causes occasional desyncs; cheating causes sustained desyncs
+const DESYNC_WINDOW: int = 100  # Track last 100 hash exchanges
+const DESYNC_WARN_RATIO: float = 0.05  # >5% = warn
+const DESYNC_FLAG_RATIO: float = 0.15  # >15% = flag match
+const DESYNC_DISCONNECT_RATIO: float = 0.50  # >50% = definitive, disconnect
+const DESYNC_CONSECUTIVE_MAX: int = 5  # 5 in a row = immediate disconnect
 
 # Input bit flags (mirror InputManager constants)
 const INPUT_FORWARD: int = 1
@@ -15,9 +22,12 @@ const INPUT_BACK: int = 2
 const INPUT_UP: int = 4
 const INPUT_DOWN: int = 8
 
-var desync_count: int = 0
+var desync_count: int = 0  # Consecutive desyncs
+var _desync_history: Array = []  # Sliding window: true=match, false=mismatch
+var _total_exchanges: int = 0
 var _last_local_hash: PackedByteArray = PackedByteArray()
 var _flagged: bool = false
+var _desync_level: String = "ok"  # "ok", "warn", "flagged", "disconnect"
 
 
 func should_exchange_hash(frame: int) -> bool:
@@ -42,25 +52,67 @@ func compute_state_hash(game_state: Dictionary, f1_state: Dictionary, f2_state: 
 
 
 func compare_hashes(local_hash: PackedByteArray, remote_hash: PackedByteArray) -> bool:
+	_total_exchanges += 1
+	var matched: bool = true
+
 	if local_hash.size() != remote_hash.size():
+		matched = false
+	else:
+		# Constant-time byte comparison
+		var diff: int = 0
+		for i in range(local_hash.size()):
+			diff = diff | (local_hash[i] ^ remote_hash[i])
+		matched = (diff == 0)
+
+	# Track in sliding window
+	_desync_history.append(matched)
+	if _desync_history.size() > DESYNC_WINDOW:
+		_desync_history.pop_front()
+
+	# Track consecutive
+	if matched:
+		desync_count = 0
+	else:
 		desync_count += 1
-		return false
 
-	# Constant-time byte comparison
-	var diff: int = 0
-	for i in range(local_hash.size()):
-		diff = diff | (local_hash[i] ^ remote_hash[i])
+	# Update desync level based on ratio
+	_update_desync_level()
 
-	if diff != 0:
-		desync_count += 1
-		return false
+	return matched
 
-	desync_count = 0
-	return true
+
+func _update_desync_level() -> void:
+	var ratio: float = get_desync_ratio()
+
+	if desync_count >= DESYNC_CONSECUTIVE_MAX:
+		_desync_level = "disconnect"
+	elif ratio >= DESYNC_DISCONNECT_RATIO:
+		_desync_level = "disconnect"
+	elif ratio >= DESYNC_FLAG_RATIO:
+		_desync_level = "flagged"
+		_flagged = true
+	elif ratio >= DESYNC_WARN_RATIO:
+		_desync_level = "warn"
+	else:
+		_desync_level = "ok"
+
+
+func get_desync_ratio() -> float:
+	if _desync_history.is_empty():
+		return 0.0
+	var mismatches: int = 0
+	for m in _desync_history:
+		if not m:
+			mismatches += 1
+	return float(mismatches) / _desync_history.size()
 
 
 func is_desynced() -> bool:
-	return desync_count >= MAX_DESYNC_COUNT
+	return _desync_level == "disconnect"
+
+
+func get_desync_level() -> String:
+	return _desync_level
 
 
 func validate_input_sequence(input_history: Dictionary, frame: int) -> bool:
@@ -150,7 +202,10 @@ func flag_match(reason: String) -> void:
 
 func reset() -> void:
 	desync_count = 0
+	_desync_history.clear()
+	_total_exchanges = 0
 	_flagged = false
+	_desync_level = "ok"
 	_last_local_hash = PackedByteArray()
 
 

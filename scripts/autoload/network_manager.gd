@@ -234,7 +234,8 @@ func _start_auth_as_joiner() -> void:
 		var pm = get_node_or_null("/root/ProfileManager")
 		if pm:
 			profile = pm.get_display_identity()
-	var hello: PackedByteArray = AuthHandshake.create_hello(profile, _session_key.slice(0, 4))
+	var session_token = CryptoUtils.hmac_sha256(_session_key, "finalfade-session-token".to_utf8_buffer()).slice(0, 16)
+	var hello: PackedByteArray = AuthHandshake.create_hello(profile, session_token)
 	_send_reliable(hello)
 
 

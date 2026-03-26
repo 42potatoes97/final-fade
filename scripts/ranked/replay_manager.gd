@@ -355,6 +355,62 @@ func analyze_for_skill(replay: Dictionary, player_id: String) -> Dictionary:
 	}
 
 
+## Run replay analysis on a background thread (zero frame impact).
+## Emits skill_analysis_complete when done.
+signal skill_analysis_complete(metrics: Dictionary, skill_score: float)
+
+func analyze_in_background(replay: Dictionary, player_id: String) -> void:
+	# Use WorkerThreadPool to offload analysis — pure data, no Node access
+	WorkerThreadPool.add_task(func():
+		var metrics: Dictionary = analyze_for_skill(replay, player_id)
+		var score: float = RatingCalculator.calculate_skill_score(metrics)
+		# Emit on main thread via call_deferred
+		skill_analysis_complete.emit.call_deferred(metrics, score)
+	)
+
+
+## Batch-analyze all local replays for a player (end-of-session ranked update).
+## Returns combined metrics averaged across all replays.
+func batch_analyze_local(player_id: String) -> Dictionary:
+	var replay_files: Array = get_local_replays()
+	if replay_files.is_empty():
+		return {"input_diversity": 0.0, "avg_reaction_frames": 15.0, "punishment_rate": 0.5, "movement_variety": 0.0}
+
+	var combined: Dictionary = {
+		"input_diversity": 0.0,
+		"avg_reaction_frames": 0.0,
+		"punishment_rate": 0.0,
+		"movement_variety": 0.0,
+	}
+	var count: int = 0
+
+	for meta in replay_files:
+		var path: String = REPLAY_DIR + meta.get("match_id", "") + ".json"
+		if not FileAccess.file_exists(path):
+			continue
+		var f: FileAccess = FileAccess.open(path, FileAccess.READ)
+		if f == null:
+			continue
+		var json: JSON = JSON.new()
+		if json.parse(f.get_as_text()) != OK:
+			continue
+		if not json.data is Dictionary:
+			continue
+
+		var metrics: Dictionary = analyze_for_skill(json.data, player_id)
+		combined["input_diversity"] += metrics["input_diversity"]
+		combined["avg_reaction_frames"] += metrics["avg_reaction_frames"]
+		combined["punishment_rate"] += metrics["punishment_rate"]
+		combined["movement_variety"] += metrics["movement_variety"]
+		count += 1
+
+	if count > 0:
+		for key in combined:
+			combined[key] = combined[key] / count
+
+	return combined
+
+
 ## Deterministic JSON with recursively sorted dictionary keys.
 static func _sorted_json(data: Variant) -> String:
 	if data is Dictionary:

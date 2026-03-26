@@ -404,12 +404,13 @@ func manual_tick(delta: float) -> void:
 	if hitstop_remaining > 0:
 		hitstop_remaining -= 1
 		velocity = Vector3.ZERO
-		# Small shake on defender during hitstop
-		if model and hitstop_remaining > 0:
-			var shake = Vector3(randf_range(-0.02, 0.02), 0, randf_range(-0.02, 0.02))
-			model.position = shake
-		elif model:
-			model.position = Vector3.ZERO  # Reset shake on last frame
+		# Small shake on defender during hitstop (skip during rollback resim — non-deterministic)
+		if model and not RollbackManager.is_resimulating:
+			if hitstop_remaining > 0:
+				var shake = Vector3(randf_range(-0.02, 0.02), 0, randf_range(-0.02, 0.02))
+				model.position = shake
+			else:
+				model.position = Vector3.ZERO  # Reset shake on last frame
 		# Apply pending knockback when hitstop ends
 		if hitstop_remaining == 0 and pending_knockback != Vector3.ZERO:
 			velocity = pending_knockback

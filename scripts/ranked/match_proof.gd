@@ -118,15 +118,24 @@ static func verify_proof_structure(proof: Dictionary) -> bool:
 
 
 ## Builds a proof chain for a player from an array of proof dicts.
-## chain_hash = SHA-256 of all proof hashes concatenated in order.
+## Each proof gets a prev_hash linking to the previous proof's match_hash.
+## chain_hash = SHA-256 of all proof hashes + prev_hash links concatenated in order.
 static func build_proof_chain(player_id: String, proofs: Array) -> Dictionary:
-	var proof_hashes: String = ""
+	# Add prev_hash links to each proof
+	var prev_hash: String = ""
+	for i in range(proofs.size()):
+		proofs[i]["prev_hash"] = prev_hash
+		prev_hash = proofs[i].get("match_hash", "")
+
+	# Compute chain_hash from all proof hashes INCLUDING prev_hash links
+	var hash_data: String = ""
 	for proof in proofs:
-		proof_hashes += proof.get("match_hash", "")
+		hash_data += proof.get("prev_hash", "")
+		hash_data += proof.get("match_hash", "")
 
 	var ctx: HashingContext = HashingContext.new()
 	ctx.start(HashingContext.HASH_SHA256)
-	ctx.update(proof_hashes.to_utf8_buffer())
+	ctx.update(hash_data.to_utf8_buffer())
 	var chain_hash: String = ctx.finish().hex_encode()
 
 	return {
@@ -137,21 +146,53 @@ static func build_proof_chain(player_id: String, proofs: Array) -> Dictionary:
 
 
 ## Verifies a proof chain by recomputing chain_hash from its proofs.
+## Also verifies prev_hash links form a valid chain, timestamps are strictly
+## ascending, and no duplicate proofs exist (by match_hash).
 static func verify_chain_integrity(chain: Dictionary) -> bool:
 	if not chain.has("player_id") or not chain.has("proofs") or not chain.has("chain_hash"):
 		return false
 	if not chain["proofs"] is Array:
 		return false
 
-	var proof_hashes: String = ""
-	for proof in chain["proofs"]:
+	var proofs: Array = chain["proofs"]
+	var seen_hashes: Dictionary = {}
+	var prev_expected: String = ""
+	var last_timestamp: String = ""
+
+	var hash_data: String = ""
+	for i in range(proofs.size()):
+		var proof = proofs[i]
 		if not proof is Dictionary:
 			return false
-		proof_hashes += proof.get("match_hash", "")
+
+		var match_hash: String = proof.get("match_hash", "")
+		var prev_hash: String = proof.get("prev_hash", "")
+
+		# Verify prev_hash links: first proof must have empty prev_hash,
+		# subsequent proofs must link to the previous proof's match_hash
+		if prev_hash != prev_expected:
+			return false
+		prev_expected = match_hash
+
+		# Check for duplicate proofs by match_hash
+		if seen_hashes.has(match_hash):
+			return false
+		seen_hashes[match_hash] = true
+
+		# Verify timestamps are strictly ascending
+		var md: Dictionary = proof.get("match_data", {})
+		if md is Dictionary and md.has("timestamp"):
+			var ts: String = str(md["timestamp"])
+			if not last_timestamp.is_empty() and ts <= last_timestamp:
+				return false
+			last_timestamp = ts
+
+		hash_data += prev_hash
+		hash_data += match_hash
 
 	var ctx: HashingContext = HashingContext.new()
 	ctx.start(HashingContext.HASH_SHA256)
-	ctx.update(proof_hashes.to_utf8_buffer())
+	ctx.update(hash_data.to_utf8_buffer())
 	var recomputed: String = ctx.finish().hex_encode()
 
 	return recomputed == chain["chain_hash"]

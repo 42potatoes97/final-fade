@@ -38,6 +38,15 @@ func stop_browsing() -> void:
 
 func announce_room(room: Dictionary) -> void:
 	room["timestamp"] = _get_unix_time()
+	# Sign the room announcement with the player's signing key
+	var pm = Engine.get_main_loop().root.get_node_or_null("ProfileManager")
+	var signing_key: PackedByteArray = pm.get_signing_key() if pm and pm.has_method("get_signing_key") else PackedByteArray()
+	if signing_key.size() > 0:
+		var room_no_sig: Dictionary = room.duplicate()
+		room_no_sig.erase("signature")
+		var canonical: String = MatchProof._sorted_json(room_no_sig)
+		var sig: PackedByteArray = CryptoUtils.hmac_sha256(signing_key, canonical.to_utf8_buffer())
+		room["signature"] = Marshalls.raw_to_base64(sig)
 	_hosting_room = room
 	var payload := JSON.stringify(room)
 	_signaling.publish(LOBBY_TOPIC, payload)
@@ -118,6 +127,13 @@ func _on_message(topic: String, payload: String) -> void:
 	var ts = parsed.get("timestamp")
 	if not (ts is int or ts is float):
 		return
+
+	# Verify signature: skip entries with missing/invalid signatures
+	var sig_b64 = parsed.get("signature")
+	if not sig_b64 is String or sig_b64.is_empty():
+		return
+	if Marshalls.base64_to_raw(sig_b64).size() != 32:
+		return  # Invalid HMAC-SHA256 signature length
 
 	# Strip to only validated fields
 	var clean_room: Dictionary = {

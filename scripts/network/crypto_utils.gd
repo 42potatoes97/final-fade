@@ -51,20 +51,40 @@ static func encrypt_room_data(ip: String, port: int, session_key: PackedByteArra
 	var ciphertext: PackedByteArray = aes.update(plaintext)
 	aes.finish()
 
-	# Return IV + ciphertext (IV is not secret, needed for decryption)
+	# Compute HMAC-SHA256 auth tag over (IV + ciphertext), truncated to 16 bytes
+	var iv_cipher: PackedByteArray = PackedByteArray()
+	iv_cipher.append_array(iv)
+	iv_cipher.append_array(ciphertext)
+	var auth_tag: PackedByteArray = hmac_sha256(key_32, iv_cipher).slice(0, 16)
+
+	# Return IV + ciphertext + auth_tag
 	var result: PackedByteArray = PackedByteArray()
 	result.append_array(iv)
 	result.append_array(ciphertext)
-	return result  # 32 bytes: [16B IV][16B ciphertext]
+	result.append_array(auth_tag)
+	return result  # 48 bytes: [16B IV][16B ciphertext][16B auth_tag]
 
 
 static func decrypt_room_data(encrypted: PackedByteArray, session_key: PackedByteArray) -> Dictionary:
-	if encrypted.size() != 32:
+	if encrypted.size() != 48:
 		return {"ip": "", "port": 0, "valid": false}
 
 	var iv: PackedByteArray = encrypted.slice(0, 16)
 	var ciphertext: PackedByteArray = encrypted.slice(16, 32)
+	var received_tag: PackedByteArray = encrypted.slice(32, 48)
 	var key_32: PackedByteArray = _derive_key(session_key)
+
+	# Verify auth tag before decrypting (authenticate-then-decrypt)
+	var iv_cipher: PackedByteArray = PackedByteArray()
+	iv_cipher.append_array(iv)
+	iv_cipher.append_array(ciphertext)
+	var expected_tag: PackedByteArray = hmac_sha256(key_32, iv_cipher).slice(0, 16)
+	# Constant-time comparison
+	var tag_diff: int = 0
+	for i in range(16):
+		tag_diff = tag_diff | (received_tag[i] ^ expected_tag[i])
+	if tag_diff != 0:
+		return {"ip": "", "port": 0, "valid": false}
 
 	var aes: AESContext = AESContext.new()
 	aes.start(AESContext.MODE_CBC_DECRYPT, key_32, iv)
@@ -142,7 +162,7 @@ static func generate_room_code(ip: String, port: int) -> Dictionary:
 	if encrypted.is_empty():
 		return {"code": "ERROR", "session_key": PackedByteArray()}
 
-	# Combine key + encrypted: [32B key][32B IV+cipher] = 64 bytes
+	# Combine key + encrypted: [32B key][48B IV+cipher+tag] = 80 bytes
 	var combined: PackedByteArray = PackedByteArray()
 	combined.append_array(session_key)
 	combined.append_array(encrypted)
@@ -153,12 +173,12 @@ static func generate_room_code(ip: String, port: int) -> Dictionary:
 
 static func decode_room_code(code: String) -> Dictionary:
 	# Returns {ip, port, session_key, valid}
-	var combined: PackedByteArray = code_to_bytes(code, 64)
-	if combined.size() != 64:
+	var combined: PackedByteArray = code_to_bytes(code, 80)
+	if combined.size() != 80:
 		return {"ip": "", "port": 0, "session_key": PackedByteArray(), "valid": false}
 
 	var session_key: PackedByteArray = combined.slice(0, 32)
-	var encrypted: PackedByteArray = combined.slice(32, 64)
+	var encrypted: PackedByteArray = combined.slice(32, 80)
 	var decrypted: Dictionary = decrypt_room_data(encrypted, session_key)
 	decrypted["session_key"] = session_key
 	return decrypted

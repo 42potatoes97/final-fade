@@ -5,6 +5,9 @@ extends Node
 #
 # Snapshot convention: snapshot[N] holds the game state BEFORE frame N is simulated.
 # To re-simulate from frame N, load snapshot[N], then simulate frames N..current.
+#
+# Dynamic rollback budget: adjusts max_rollback_frames based on measured frame time
+# to stay within 60fps on weaker hardware (integrated graphics laptops).
 
 var is_active: bool = false
 var is_resimulating: bool = false
@@ -12,7 +15,16 @@ var is_resimulating: bool = false
 # Frame tracking
 var current_frame: int = 0
 var input_delay: int = 2  # Frames of input delay (reduces rollbacks)
-var max_rollback_frames: int = 8  # Max frames we can roll back
+var max_rollback_frames: int = 8  # Max frames we can roll back (adjusted dynamically)
+
+# Dynamic budget
+const MIN_ROLLBACK_FRAMES: int = 2  # Never go below 2
+const MAX_ROLLBACK_FRAMES_CAP: int = 8  # Never exceed 8
+const TARGET_FRAME_MS: float = 16.67  # 60fps target
+const ROLLBACK_BUDGET_RATIO: float = 0.35  # Max 35% of frame for rollback
+var _frame_time_avg_ms: float = 8.0  # Rolling average of non-rollback frame time
+var _frame_time_samples: int = 0
+const FRAME_TIME_WINDOW: int = 60  # Average over last 60 frames
 
 # State snapshots (ring buffer)
 const BUFFER_SIZE: int = 64
@@ -51,6 +63,8 @@ func start(f1: CharacterBody3D, f2: CharacterBody3D) -> void:
 	current_frame = 0
 	last_confirmed_remote_frame = -1
 	_needs_mismatch_check = false
+	_frame_time_avg_ms = 8.0
+	_frame_time_samples = 0
 	local_input_history.clear()
 	remote_input_history.clear()
 	remote_input_predicted.clear()
@@ -78,11 +92,12 @@ func network_tick() -> void:
 	if not is_active or fighter1 == null or fighter2 == null:
 		return
 
-	var fixed_delta = 1.0 / 60.0
+	var fixed_delta: float = 1.0 / 60.0
+	var tick_start_ms: float = Time.get_ticks_msec()
 
 	# 1. Read local input for this frame + input_delay
-	var local_input = InputManager._read_player_input(_local_id)
-	var input_frame = current_frame + input_delay
+	var local_input: int = InputManager._read_player_input(_local_id)
+	var input_frame: int = current_frame + input_delay
 	local_input_history[input_frame] = local_input
 
 	# 2. Send to remote
@@ -92,10 +107,10 @@ func network_tick() -> void:
 	# 3. Check if rollback is needed (only when new remote inputs arrived)
 	if _needs_mismatch_check:
 		_needs_mismatch_check = false
-		var rollback_frame = _find_rollback_frame()
+		var rollback_frame: int = _find_rollback_frame()
 
 		if rollback_frame >= 0:
-			# Clamp rollback to max allowed range
+			# Clamp rollback to dynamic max range
 			var min_frame: int = maxi(rollback_frame, current_frame - max_rollback_frames)
 			# 4. ROLLBACK — load snapshot, skip if not available
 			if _load_snapshot(min_frame):
@@ -113,8 +128,8 @@ func network_tick() -> void:
 		return  # Don't advance, wait for remote
 
 	# 7. Simulate current frame
-	var p1_input = _get_input(1, current_frame)
-	var p2_input = _get_input(2, current_frame)
+	var p1_input: int = _get_input(1, current_frame)
+	var p2_input: int = _get_input(2, current_frame)
 	_simulate_frame(p1_input, p2_input, fixed_delta)
 
 	# Record confirmed inputs for replay (ranked matches only)
@@ -128,8 +143,9 @@ func network_tick() -> void:
 
 	# Anti-cheat: periodic state hash exchange
 	if anticheat and _network and anticheat.should_exchange_hash(current_frame):
-		var snap = state_buffer[current_frame % BUFFER_SIZE]
-		var local_hash = anticheat.compute_state_hash(snap.get("gm", {}), snap.get("f1", {}), snap.get("f2", {}))
+		var snap: Dictionary = state_buffer[current_frame % BUFFER_SIZE]
+		var local_hash: PackedByteArray = anticheat.compute_state_hash(
+			snap.get("gm", {}), snap.get("f1", {}), snap.get("f2", {}))
 		anticheat._last_local_hash = local_hash
 		_network._rpc_state_hash.rpc(local_hash)
 
@@ -146,8 +162,14 @@ func network_tick() -> void:
 			if auto_delay_enabled:
 				var quality: ConnectionQuality = _network.get_quality()
 				var recommended: int = quality.get_recommended_delay()
+				# Cap auto-delay so it doesn't exceed rollback budget
+				recommended = mini(recommended, max_rollback_frames - 2)
 				if recommended != input_delay:
-					input_delay = recommended
+					input_delay = maxi(recommended, 1)
+
+	# 11. Update dynamic rollback budget from measured frame time
+	var tick_end_ms: float = Time.get_ticks_msec()
+	_update_dynamic_budget(tick_end_ms - tick_start_ms)
 
 
 func _simulate_frame(p1_input: int, p2_input: int, delta: float) -> void:
@@ -166,7 +188,7 @@ func _get_input(player_id: int, frame: int) -> int:
 		if remote_input_history.has(frame):
 			return remote_input_history[frame]
 		else:
-			var predicted = _predict_remote_input(frame)
+			var predicted: int = _predict_remote_input(frame)
 			remote_input_predicted[frame] = predicted
 			return predicted
 
@@ -180,7 +202,7 @@ func _predict_remote_input(_frame: int) -> int:
 
 func _find_rollback_frame() -> int:
 	# Check if any predicted remote input was wrong
-	var earliest_mismatch = -1
+	var earliest_mismatch: int = -1
 
 	for frame in remote_input_history:
 		if frame > current_frame:
@@ -211,8 +233,8 @@ func _should_freeze() -> bool:
 
 
 func _save_snapshot(frame: int) -> void:
-	var idx = frame % BUFFER_SIZE
-	var snap = state_buffer[idx]
+	var idx: int = frame % BUFFER_SIZE
+	var snap: Dictionary = state_buffer[idx]
 	snap["frame"] = frame
 	snap["f1"] = fighter1.save_state()
 	snap["f2"] = fighter2.save_state()
@@ -229,6 +251,13 @@ func _load_snapshot(frame: int) -> bool:
 	fighter1.load_state(snapshot["f1"])
 	fighter2.load_state(snapshot["f2"])
 	GameManager.set_game_state(snapshot["gm"])
+
+	# Sync input buffer frame_count with rollback frame to prevent expiry bugs
+	if fighter1.input_buffer:
+		fighter1.input_buffer.frame_count = frame
+	if fighter2.input_buffer:
+		fighter2.input_buffer.frame_count = frame
+
 	return true
 
 
@@ -238,6 +267,41 @@ func _on_remote_input(frame: int, input_bits: int) -> void:
 		if frame > last_confirmed_remote_frame:
 			last_confirmed_remote_frame = frame
 		_needs_mismatch_check = true
+
+
+# --- Dynamic Rollback Budget ---
+# Measures actual frame time and adjusts max_rollback_frames to fit hardware.
+# On a ThinkPad with integrated graphics, rendering may take 8-10ms,
+# leaving only ~6ms for game logic. We allocate ROLLBACK_BUDGET_RATIO (35%)
+# of the remaining budget for rollback resimulation.
+
+func _update_dynamic_budget(tick_ms: float) -> void:
+	# Rolling average of frame time (excluding rollback cost)
+	_frame_time_samples += 1
+	if _frame_time_samples <= FRAME_TIME_WINDOW:
+		_frame_time_avg_ms = (_frame_time_avg_ms * (_frame_time_samples - 1) + tick_ms) / _frame_time_samples
+	else:
+		# Exponential moving average after warmup
+		var alpha: float = 2.0 / (FRAME_TIME_WINDOW + 1)
+		_frame_time_avg_ms = alpha * tick_ms + (1.0 - alpha) * _frame_time_avg_ms
+
+	# Only adjust every 30 frames to avoid thrashing
+	if current_frame % 30 != 0:
+		return
+
+	# Available budget = target - avg frame time (rendering + physics)
+	var available_ms: float = TARGET_FRAME_MS - _frame_time_avg_ms
+	var rollback_budget_ms: float = available_ms * ROLLBACK_BUDGET_RATIO
+
+	# Estimate cost per resim frame (~0.5ms on fast hardware, scale by ratio)
+	# Use measured tick_ms as proxy for single-frame sim cost
+	var sim_cost_ms: float = maxf(_frame_time_avg_ms * 0.6, 0.5)  # At least 0.5ms
+
+	# How many frames can we afford?
+	var affordable: int = int(rollback_budget_ms / sim_cost_ms) if sim_cost_ms > 0 else MAX_ROLLBACK_FRAMES_CAP
+
+	# Clamp to range
+	max_rollback_frames = clampi(affordable, MIN_ROLLBACK_FRAMES, MAX_ROLLBACK_FRAMES_CAP)
 
 
 static func _prune_dict(dict: Dictionary, cutoff: int) -> void:
@@ -250,7 +314,7 @@ static func _prune_dict(dict: Dictionary, cutoff: int) -> void:
 
 
 func _cleanup_old_data() -> void:
-	var cutoff = current_frame - BUFFER_SIZE
+	var cutoff: int = current_frame - BUFFER_SIZE
 	_prune_dict(local_input_history, cutoff)
 	_prune_dict(remote_input_history, cutoff)
 	_prune_dict(remote_input_predicted, cutoff)

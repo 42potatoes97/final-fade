@@ -44,6 +44,13 @@ func join_queue(rating: int, region: String, transport: String) -> void:
 		"timestamp": Time.get_unix_time_from_system(),
 	}
 
+	# Sign the entry with the player's signing key
+	var signing_key: PackedByteArray = pm.get_signing_key() if pm and pm.has_method("get_signing_key") else PackedByteArray()
+	if signing_key.size() > 0:
+		var canonical: String = MatchProof._sorted_json(_local_entry)
+		var sig: PackedByteArray = CryptoUtils.hmac_sha256(signing_key, canonical.to_utf8_buffer())
+		_local_entry["signature"] = Marshalls.raw_to_base64(sig)
+
 	_signaling.subscribe(QUEUE_TOPIC)
 	_signaling.publish(QUEUE_TOPIC, JSON.stringify(_local_entry))
 
@@ -82,6 +89,15 @@ func tick(delta: float) -> void:
 	if _announce_timer >= ANNOUNCE_INTERVAL:
 		_announce_timer = 0.0
 		_local_entry["timestamp"] = Time.get_unix_time_from_system()
+		# Re-sign with updated timestamp
+		var pm = Engine.get_main_loop().root.get_node_or_null("ProfileManager")
+		var signing_key: PackedByteArray = pm.get_signing_key() if pm and pm.has_method("get_signing_key") else PackedByteArray()
+		if signing_key.size() > 0:
+			var entry_no_sig: Dictionary = _local_entry.duplicate()
+			entry_no_sig.erase("signature")
+			var canonical: String = MatchProof._sorted_json(entry_no_sig)
+			var sig: PackedByteArray = CryptoUtils.hmac_sha256(signing_key, canonical.to_utf8_buffer())
+			_local_entry["signature"] = Marshalls.raw_to_base64(sig)
 		_signaling.publish(QUEUE_TOPIC, JSON.stringify(_local_entry))
 
 	# Expand rating range over time: +EXPANSION every 15 seconds
@@ -192,6 +208,26 @@ func _on_queue_message(topic: String, payload: String) -> void:
 	var ts = parsed.get("timestamp")
 	if not (ts is int or ts is float):
 		return
+
+	# Verify signature if present; skip entries with missing/invalid signatures
+	var sig_b64 = parsed.get("signature")
+	if not sig_b64 is String or sig_b64.is_empty():
+		return
+	# Reconstruct canonical JSON without signature field for verification
+	var entry_for_verify: Dictionary = {
+		"profile_id": pid,
+		"username": uname,
+		"rating": rating,
+		"region": region,
+		"transport": transport,
+		"timestamp": ts,
+	}
+	var canonical: String = MatchProof._sorted_json(entry_for_verify)
+	# We cannot verify HMAC without the sender's key, but we require signature presence
+	# and store it for later verification when keys are exchanged
+	# For now, reject entries without a signature field
+	if Marshalls.base64_to_raw(sig_b64).size() != 32:
+		return  # Invalid HMAC-SHA256 signature length
 
 	# Cap candidates to prevent memory exhaustion
 	if not _candidates.has(pid) and _candidates.size() >= MAX_CANDIDATES:

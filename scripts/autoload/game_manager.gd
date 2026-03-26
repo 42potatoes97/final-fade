@@ -74,6 +74,13 @@ func manual_tick(delta: float) -> void:
 		return
 
 	round_timer -= delta
+
+	# Suppress UI signals and round-end triggers during rollback resimulation
+	if RollbackManager.is_resimulating:
+		if round_timer <= 0:
+			round_timer = 0
+		return
+
 	timer_updated.emit(round_timer)
 
 	if round_timer <= 0:
@@ -97,12 +104,14 @@ func apply_damage(player_id: int, damage: int) -> void:
 
 	if player_id == 1:
 		p1_health = max(0, p1_health - damage)
-		health_changed.emit(1, p1_health)
+		if not RollbackManager.is_resimulating:
+			health_changed.emit(1, p1_health)
 		if p1_health <= 0:
 			_round_win(2)
 	else:
 		p2_health = max(0, p2_health - damage)
-		health_changed.emit(2, p2_health)
+		if not RollbackManager.is_resimulating:
+			health_changed.emit(2, p2_health)
 		if p2_health <= 0:
 			_round_win(1)
 
@@ -123,6 +132,11 @@ func _round_win(winner_id: int) -> void:
 		p1_round_wins += 1
 	else:
 		p2_round_wins += 1
+
+	# Suppress UI signals during rollback resimulation
+	if RollbackManager.is_resimulating:
+		return
+
 	round_ended.emit(winner_id)
 
 	if p1_round_wins >= ROUNDS_TO_WIN:
@@ -133,15 +147,16 @@ func _round_win(winner_id: int) -> void:
 		state = GameState.MATCH_END
 		p2_match_wins += 1
 		match_ended.emit(2)
-	else:
-		# Brief delay then next round (handled by fight_scene)
-		pass
 
 
 func _round_draw() -> void:
 	state = GameState.ROUND_END
 	p1_round_wins += 1
 	p2_round_wins += 1
+
+	if RollbackManager.is_resimulating:
+		return
+
 	round_ended.emit(0)  # 0 = draw
 
 	# Check if either (or both) hit the win threshold
