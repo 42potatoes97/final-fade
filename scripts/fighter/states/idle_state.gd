@@ -6,7 +6,7 @@ extends FighterState
 # UP/DOWN have a brief wait window before committing to hop/duck
 # so double-tap sidestep has time to register.
 
-const UP_WAIT_FRAMES: int = 8  # Frames to wait after first UP before committing to hop
+const UP_WAIT_FRAMES: int = 5  # Frames to wait after first UP before committing to hop (was 8, too sluggish)
 const DOWN_WAIT_FRAMES: int = 3  # Very responsive crouch — makes KBD harder, backsway comes out on sloppy input
 
 var up_pending_frames: int = 0  # Counts up after first UP press
@@ -109,15 +109,14 @@ func handle_input(input_bits: int) -> String:
 			down_pending_frames = 0
 			return "Crouch"
 
-	# --- Walk (only if no pending up/down) ---
-	if up_pending_frames == 0 and down_pending_frames == 0:
-		var holding_fwd = IM.has_flag(input_bits, IM.INPUT_FORWARD)
-		var holding_back = IM.has_flag(input_bits, IM.INPUT_BACK)
+	# --- Walk (always responsive — up/down pending doesn't block lateral movement) ---
+	var holding_fwd = IM.has_flag(input_bits, IM.INPUT_FORWARD)
+	var holding_back = IM.has_flag(input_bits, IM.INPUT_BACK)
 
-		if holding_fwd:
-			return "WalkForward"
-		if holding_back:
-			return "WalkBackward"
+	if holding_fwd:
+		return "WalkForward"
+	if holding_back:
+		return "WalkBackward"
 
 	return ""
 

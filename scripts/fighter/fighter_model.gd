@@ -176,7 +176,7 @@ func _get_stance_pose() -> Dictionary:
 
 func set_pose_fight_stance() -> void:
 	idle_bob_active = true
-	blend_speed = 15.0
+	blend_speed = 25.0  # Snappy stance transitions (was 15)
 	_set_pose({
 		"torso": Vector3(2, 0, 0),
 		"head": Vector3(0, -1, -1),
