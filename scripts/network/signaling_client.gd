@@ -20,7 +20,8 @@ var _packet_id_counter: int = 1
 
 func connect_to_broker() -> void:
 	_ws = WebSocketPeer.new()
-	var err := _ws.connect_to_url(BROKER_URL, TLSOptions.client(), PackedStringArray(["mqtt"]))
+	_ws.supported_protocols = PackedStringArray(["mqtt"])
+	var err := _ws.connect_to_url(BROKER_URL, TLSOptions.client())
 	if err != OK:
 		push_error("SignalingClient: WebSocket connect failed (error %d)" % err)
 

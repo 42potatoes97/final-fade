@@ -76,7 +76,7 @@ func manual_tick(delta: float) -> void:
 	round_timer -= delta
 
 	# Suppress UI signals and round-end triggers during rollback resimulation
-	if RollbackManager.is_resimulating:
+	if RollbackManager != null and RollbackManager.is_resimulating:
 		if round_timer <= 0:
 			round_timer = 0
 		return
@@ -104,13 +104,13 @@ func apply_damage(player_id: int, damage: int) -> void:
 
 	if player_id == 1:
 		p1_health = max(0, p1_health - damage)
-		if not RollbackManager.is_resimulating:
+		if not (RollbackManager != null and RollbackManager.is_resimulating):
 			health_changed.emit(1, p1_health)
 		if p1_health <= 0:
 			_round_win(2)
 	else:
 		p2_health = max(0, p2_health - damage)
-		if not RollbackManager.is_resimulating:
+		if not (RollbackManager != null and RollbackManager.is_resimulating):
 			health_changed.emit(2, p2_health)
 		if p2_health <= 0:
 			_round_win(1)
@@ -134,7 +134,7 @@ func _round_win(winner_id: int) -> void:
 		p2_round_wins += 1
 
 	# Suppress UI signals during rollback resimulation
-	if RollbackManager.is_resimulating:
+	if RollbackManager != null and RollbackManager.is_resimulating:
 		return
 
 	round_ended.emit(winner_id)
@@ -154,7 +154,7 @@ func _round_draw() -> void:
 	p1_round_wins += 1
 	p2_round_wins += 1
 
-	if RollbackManager.is_resimulating:
+	if RollbackManager != null and RollbackManager.is_resimulating:
 		return
 
 	round_ended.emit(0)  # 0 = draw
