@@ -356,59 +356,51 @@ func analyze_for_skill(replay: Dictionary, player_id: String) -> Dictionary:
 
 
 ## Run replay analysis on a background thread (zero frame impact).
-## Emits skill_analysis_complete when done.
+## Automatically fires after each match — no batch processing needed.
+## Updates a running average skill score incrementally.
 signal skill_analysis_complete(metrics: Dictionary, skill_score: float)
+
+# Running average state — persists across matches in a session
+var _skill_sample_count: int = 0
+var _running_metrics: Dictionary = {
+	"input_diversity": 0.0,
+	"avg_reaction_frames": 15.0,
+	"punishment_rate": 0.5,
+	"movement_variety": 0.0,
+}
+var current_skill_score: float = 0.5  # Updated incrementally
+
 
 func analyze_in_background(replay: Dictionary, player_id: String) -> void:
 	# Use WorkerThreadPool to offload analysis — pure data, no Node access
 	WorkerThreadPool.add_task(func():
 		var metrics: Dictionary = analyze_for_skill(replay, player_id)
 		var score: float = RatingCalculator.calculate_skill_score(metrics)
-		# Emit on main thread via call_deferred
-		skill_analysis_complete.emit.call_deferred(metrics, score)
+		# Update running average and emit on main thread
+		_update_running_average.call_deferred(metrics, score)
 	)
 
 
-## Batch-analyze all local replays for a player (end-of-session ranked update).
-## Returns combined metrics averaged across all replays.
-func batch_analyze_local(player_id: String) -> Dictionary:
-	var replay_files: Array = get_local_replays()
-	if replay_files.is_empty():
-		return {"input_diversity": 0.0, "avg_reaction_frames": 15.0, "punishment_rate": 0.5, "movement_variety": 0.0}
+func _update_running_average(metrics: Dictionary, score: float) -> void:
+	_skill_sample_count += 1
+	var n: float = float(_skill_sample_count)
 
-	var combined: Dictionary = {
-		"input_diversity": 0.0,
-		"avg_reaction_frames": 0.0,
-		"punishment_rate": 0.0,
-		"movement_variety": 0.0,
-	}
-	var count: int = 0
+	# Incremental mean: new_avg = old_avg + (new_value - old_avg) / n
+	for key in _running_metrics:
+		if metrics.has(key):
+			_running_metrics[key] += (metrics[key] - _running_metrics[key]) / n
 
-	for meta in replay_files:
-		var path: String = REPLAY_DIR + meta.get("match_id", "") + ".json"
-		if not FileAccess.file_exists(path):
-			continue
-		var f: FileAccess = FileAccess.open(path, FileAccess.READ)
-		if f == null:
-			continue
-		var json: JSON = JSON.new()
-		if json.parse(f.get_as_text()) != OK:
-			continue
-		if not json.data is Dictionary:
-			continue
+	current_skill_score += (score - current_skill_score) / n
 
-		var metrics: Dictionary = analyze_for_skill(json.data, player_id)
-		combined["input_diversity"] += metrics["input_diversity"]
-		combined["avg_reaction_frames"] += metrics["avg_reaction_frames"]
-		combined["punishment_rate"] += metrics["punishment_rate"]
-		combined["movement_variety"] += metrics["movement_variety"]
-		count += 1
+	skill_analysis_complete.emit(_running_metrics, current_skill_score)
 
-	if count > 0:
-		for key in combined:
-			combined[key] = combined[key] / count
 
-	return combined
+func get_current_skill_score() -> float:
+	return current_skill_score
+
+
+func get_running_metrics() -> Dictionary:
+	return _running_metrics.duplicate()
 
 
 ## Deterministic JSON with recursively sorted dictionary keys.

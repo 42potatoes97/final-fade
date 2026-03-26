@@ -110,6 +110,9 @@ func _ready() -> void:
 		NetworkManager.match_proof_received.connect(_on_match_proof_received)
 		NetworkManager.match_signature_received.connect(_on_match_signature_received)
 
+		# Connect skill analysis completion — updates display rating when bg thread finishes
+		_replay_manager.skill_analysis_complete.connect(_on_skill_analysis_complete)
+
 
 func _physics_process(_delta: float) -> void:
 	# During online mode, drive simulation through RollbackManager
@@ -369,7 +372,6 @@ func _finalize_proof() -> void:
 	)
 
 	# Store in local proof chain
-	# Load or create leaderboard manager
 	if _leaderboard == null:
 		_leaderboard = LeaderboardManager.new()
 		_leaderboard.init(NetworkManager.get_signaling())
@@ -383,7 +385,26 @@ func _finalize_proof() -> void:
 	else:
 		ProfileManager.record_loss()
 
+	# Fire background replay analysis — updates running skill score incrementally
+	if _replay_manager and _pending_proof.has("replay"):
+		_replay_manager.analyze_in_background(_pending_proof["replay"], ProfileManager.profile_id)
+
+	# Auto-sync to leaderboard if config allows
+	var config: RankedConfig = RankedConfig.new()
+	config.load_config()
+	if config.auto_sync and config.has_api_token():
+		_leaderboard.publish_proof_chain(config.web3_api_token, self)
+
 	_pending_proof = {}
+
+
+func _on_skill_analysis_complete(_metrics: Dictionary, skill_score: float) -> void:
+	# Background thread finished replay analysis — update display rating
+	# Elo was already updated instantly in _finalize_proof; this adds the skill component
+	if _leaderboard:
+		var base_rating: int = _leaderboard.get_local_rating()
+		var display_rating: int = RatingCalculator.get_display_rating(float(base_rating), skill_score)
+		print("Ranked: Skill analysis complete. Base Elo: %d, Skill: %.2f, Display: %d" % [base_rating, skill_score, display_rating])
 
 
 func _on_desync_detected(_frame: int) -> void:

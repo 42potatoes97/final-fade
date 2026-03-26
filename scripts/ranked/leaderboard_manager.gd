@@ -304,8 +304,10 @@ func get_local_rating() -> int:
 	return roundi(RatingCalculator.DEFAULT_RATING)
 
 
-func get_local_skill_score() -> float:
-	# Placeholder until replay analysis is connected
+func get_local_skill_score(replay_mgr = null) -> float:
+	# Use live running average from replay_manager if available
+	if replay_mgr and replay_mgr.has_method("get_current_skill_score"):
+		return replay_mgr.get_current_skill_score()
 	return 0.5
 
 
