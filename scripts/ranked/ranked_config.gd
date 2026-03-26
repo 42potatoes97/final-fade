@@ -9,7 +9,7 @@ const CONFIG_PATH: String = "user://ranked_config.json"
 # Firebase Realtime Database URL (free Spark plan: 1GB storage, 10GB/month)
 # Create project at https://console.firebase.google.com
 # Enable Realtime Database, set rules to allow read/write
-const FIREBASE_DB_URL: String = "https://final-fade-default-rtdb.firebaseio.com"
+const FIREBASE_DB_URL: String = "https://final-fade-default-rtdb.firebaseio.com/"
 
 var region: String = "NA"
 var w3name_key: String = ""  # Base64-encoded 32-byte key for IPNS
