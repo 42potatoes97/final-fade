@@ -1,0 +1,528 @@
+extends Node3D
+
+# Main fight scene — orchestrates the match
+
+@onready var fighter1: FighterController = $Fighter1
+@onready var fighter2: FighterController = $Fighter2
+@onready var camera: FightCamera = $FightCamera
+
+var round_msg_label: Label = null
+var round_transition_timer: float = 0.0
+var round_transition_active: bool = false
+var match_end_screen: Control = null
+var overlay_canvas: CanvasLayer = null
+var pause_menu: Control = null
+var is_paused: bool = false
+
+# Spawn positions
+const P1_SPAWN = Vector3(-3, 0, 0)
+const P2_SPAWN = Vector3(3, 0, 0)
+
+
+func _ready() -> void:
+	process_mode = Node.PROCESS_MODE_ALWAYS
+	# Wire up opponents
+	fighter1.player_id = 1
+	fighter2.player_id = 2
+	fighter1.opponent = fighter2
+	fighter2.opponent = fighter1
+
+	# Set initial facing
+	InputManager.set_facing(1, 1)   # P1 faces right
+	InputManager.set_facing(2, -1)  # P2 faces left
+
+	# Apply device assignments from character select
+	InputManager.assign_device(1, GameManager.p1_device_type, GameManager.p1_device_id)
+	InputManager.assign_device(2, GameManager.p2_device_type, GameManager.p2_device_id)
+
+	# Wire camera
+	camera.fighter1 = fighter1
+	camera.fighter2 = fighter2
+
+	# Reset match state
+	GameManager.reset_match()
+
+	# Connect round/match signals
+	GameManager.round_ended.connect(_on_round_ended)
+	GameManager.match_ended.connect(_on_match_ended)
+
+	# Build round message overlay
+	_build_round_overlay()
+
+	# Set up AI controllers
+	var AIScript = load("res://scripts/ai/ai_controller.gd")
+	if GameManager.p1_device_type == InputManager.DeviceType.AI:
+		var ai = AIScript.new()
+		ai.fighter = fighter1
+		ai.opponent = fighter2
+		_apply_ai_difficulty(ai, 1)
+		add_child(ai)
+		InputManager.register_ai(1, ai)
+	if GameManager.p2_device_type == InputManager.DeviceType.AI:
+		var ai = AIScript.new()
+		ai.fighter = fighter2
+		ai.opponent = fighter1
+		_apply_ai_difficulty(ai, 2)
+		add_child(ai)
+		InputManager.register_ai(2, ai)
+
+	# Apply player colors
+	_apply_player_colors()
+
+	# Reset positions
+	_reset_positions()
+
+	# Online mode: initialize rollback and set remote player as NETWORK device
+	if GameManager.online_mode:
+		var remote_id = NetworkManager.remote_player_id
+		InputManager.assign_device(remote_id, InputManager.DeviceType.NETWORK, -1)
+		RollbackManager.input_delay = NetworkManager.input_delay
+		RollbackManager.start(fighter1, fighter2)
+
+
+func _physics_process(_delta: float) -> void:
+	# During online mode, drive simulation through RollbackManager
+	if GameManager.online_mode and RollbackManager.is_active:
+		RollbackManager.network_tick()
+
+
+func _process(delta: float) -> void:
+	if round_transition_active:
+		round_transition_timer -= delta
+		if round_transition_timer <= 0:
+			round_transition_active = false
+			round_msg_label.visible = false
+			if GameManager.state == GameManager.GameState.MATCH_END:
+				# Show match end screen with score and buttons
+				_show_match_end_screen()
+			else:
+				# Start next round
+				GameManager.start_next_round()
+				_reset_positions()
+
+
+func _build_round_overlay() -> void:
+	overlay_canvas = CanvasLayer.new()
+	overlay_canvas.layer = 20
+	add_child(overlay_canvas)
+
+	round_msg_label = Label.new()
+	round_msg_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	round_msg_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	round_msg_label.add_theme_font_size_override("font_size", 64)
+	round_msg_label.add_theme_color_override("font_color", Color.WHITE)
+	round_msg_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.8))
+	round_msg_label.add_theme_constant_override("shadow_offset_x", 3)
+	round_msg_label.add_theme_constant_override("shadow_offset_y", 3)
+	round_msg_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	round_msg_label.visible = false
+	overlay_canvas.add_child(round_msg_label)
+
+
+func _show_match_end_screen() -> void:
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+	match_end_screen = Control.new()
+	match_end_screen.set_anchors_preset(Control.PRESET_FULL_RECT)
+	overlay_canvas.add_child(match_end_screen)
+
+	# Semi-transparent background
+	var bg = ColorRect.new()
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bg.color = Color(0, 0, 0, 0.6)
+	match_end_screen.add_child(bg)
+
+	# Center container
+	var vbox = VBoxContainer.new()
+	vbox.set_anchors_preset(Control.PRESET_CENTER)
+	vbox.offset_left = -250
+	vbox.offset_top = -200
+	vbox.offset_right = 250
+	vbox.offset_bottom = 200
+	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	vbox.add_theme_constant_override("separation", 20)
+	match_end_screen.add_child(vbox)
+
+	# Winner text
+	var winner_id = 1 if GameManager.p1_round_wins >= GameManager.ROUNDS_TO_WIN else 2
+	var winner_label = Label.new()
+	winner_label.text = "P" + str(winner_id) + " WINS!"
+	winner_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	winner_label.add_theme_font_size_override("font_size", 72)
+	winner_label.add_theme_color_override("font_color", Color(1, 0.85, 0.2))
+	vbox.add_child(winner_label)
+
+	# Score
+	# Match (set) counter — primary
+	var match_score = Label.new()
+	match_score.text = "Matches:  P1  " + str(GameManager.p1_match_wins) + "  -  " + str(GameManager.p2_match_wins) + "  P2"
+	match_score.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	match_score.add_theme_font_size_override("font_size", 36)
+	match_score.add_theme_color_override("font_color", Color(0.9, 0.85, 0.5))
+	vbox.add_child(match_score)
+
+	# Round score for this set — below match count
+	var round_score = Label.new()
+	round_score.text = "Rounds:  P1  " + str(GameManager.p1_round_wins) + "  -  " + str(GameManager.p2_round_wins) + "  P2"
+	round_score.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	round_score.add_theme_font_size_override("font_size", 22)
+	round_score.add_theme_color_override("font_color", Color(0.7, 0.7, 0.8))
+	vbox.add_child(round_score)
+
+	# Spacer
+	var spacer = Control.new()
+	spacer.custom_minimum_size = Vector2(0, 20)
+	vbox.add_child(spacer)
+
+	# Rematch button
+	var rematch_btn = Button.new()
+	rematch_btn.text = "REMATCH"
+	rematch_btn.custom_minimum_size = Vector2(200, 50)
+	rematch_btn.add_theme_font_size_override("font_size", 24)
+	rematch_btn.pressed.connect(_on_rematch)
+	vbox.add_child(rematch_btn)
+
+	# Main menu button
+	var menu_btn = Button.new()
+	menu_btn.text = "MAIN MENU"
+	menu_btn.custom_minimum_size = Vector2(200, 50)
+	menu_btn.add_theme_font_size_override("font_size", 24)
+	menu_btn.pressed.connect(_on_main_menu)
+	vbox.add_child(menu_btn)
+
+
+func _on_rematch() -> void:
+	if match_end_screen:
+		match_end_screen.queue_free()
+		match_end_screen = null
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	GameManager.reset_match()
+	_reset_positions()
+
+
+func _on_main_menu() -> void:
+	GameManager.reset_session()
+	get_tree().change_scene_to_file("res://scenes/ui/main_menu.tscn")
+
+
+func _on_round_ended(winner_id: int) -> void:
+	# Show round win message, then transition
+	round_msg_label.text = "P" + str(winner_id) + " WINS ROUND " + str(GameManager.current_round)
+	round_msg_label.visible = true
+	round_transition_active = true
+	round_transition_timer = 2.5  # 2.5 second pause
+
+
+func _on_match_ended(winner_id: int) -> void:
+	round_msg_label.text = "P" + str(winner_id) + " WINS THE MATCH!"
+	round_msg_label.visible = true
+	round_transition_active = true
+	round_transition_timer = 4.0  # 4 second pause before menu
+
+
+func _exit_tree() -> void:
+	# Clean up AI references so InputManager doesn't call freed objects
+	InputManager.unregister_ai(1)
+	InputManager.unregister_ai(2)
+	# Clean up rollback manager
+	if RollbackManager.is_active:
+		RollbackManager.stop()
+
+
+func _apply_ai_difficulty(ai, player_id: int) -> void:
+	var diff = GameManager.ai_difficulty
+	if not diff.is_empty():
+		ai.difficulty = diff.get("difficulty", "NORMAL")
+
+	# Set fighter class so AI uses class-appropriate moves
+	var fc = GameManager.p1_fighter_class if player_id == 1 else GameManager.p2_fighter_class
+	ai.fighter_class = "OFFENSIVE" if fc == GameManager.FighterClass.OFFENSIVE else "DEFENSIVE"
+
+
+func _apply_player_colors() -> void:
+	_apply_colors_to_fighter(fighter1, GameManager.p1_skin_color, GameManager.p1_torso_color)
+	_apply_colors_to_fighter(fighter2, GameManager.p2_skin_color, GameManager.p2_torso_color)
+
+
+func _apply_colors_to_fighter(fighter: Node, skin_color: Color, torso_color: Color) -> void:
+	var model = fighter.get_node_or_null("Model")
+	if model == null:
+		return
+	# Walk through all MeshInstance3D children and update materials
+	for child in _get_all_mesh_instances(model):
+		var mat = child.material_override
+		if mat is StandardMaterial3D:
+			var c = mat.albedo_color
+			# Detect skin-colored meshes (head, arms, hands)
+			if _is_skin_tone(c):
+				var new_mat = mat.duplicate()
+				new_mat.albedo_color = skin_color
+				child.material_override = new_mat
+			# Detect torso-colored meshes
+			elif _is_torso_tone(c):
+				var new_mat = mat.duplicate()
+				new_mat.albedo_color = torso_color
+				child.material_override = new_mat
+
+
+func _is_skin_tone(c: Color) -> bool:
+	# Original skin colors: (0.85, 0.7, 0.55) and hand (0.9, 0.75, 0.6)
+	return c.r > 0.6 and c.g > 0.5 and c.b < 0.7 and c.b > 0.3
+
+
+func _is_torso_tone(c: Color) -> bool:
+	# Original torso: (0.2, 0.2, 0.6) or abdomen: (0.15, 0.15, 0.5)
+	return c.b > 0.4 and c.r < 0.3 and c.g < 0.3
+
+
+func _get_all_mesh_instances(node: Node) -> Array:
+	var result = []
+	if node is MeshInstance3D:
+		result.append(node)
+	for child in node.get_children():
+		result.append_array(_get_all_mesh_instances(child))
+	return result
+
+
+func _input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+		get_viewport().set_input_as_handled()
+		if match_end_screen:
+			return
+		if is_paused:
+			_destroy_overlay()
+			is_paused = false
+			get_tree().paused = false
+			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+		else:
+			is_paused = true
+			get_tree().paused = true
+			_show_pause_menu()
+
+
+func _destroy_overlay() -> void:
+	if pause_menu:
+		pause_menu.queue_free()
+		pause_menu = null
+
+
+func _show_pause_menu() -> void:
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_destroy_overlay()
+
+	pause_menu = Control.new()
+	pause_menu.set_anchors_preset(Control.PRESET_FULL_RECT)
+	pause_menu.process_mode = Node.PROCESS_MODE_ALWAYS
+	overlay_canvas.add_child(pause_menu)
+
+	var bg = ColorRect.new()
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bg.color = Color(0, 0, 0, 0.75)
+	pause_menu.add_child(bg)
+
+	# Main layout: buttons on left, movelist on right
+	var hbox = HBoxContainer.new()
+	hbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	hbox.add_theme_constant_override("separation", 30)
+	pause_menu.add_child(hbox)
+
+	# Left side — buttons
+	var btn_panel = VBoxContainer.new()
+	btn_panel.custom_minimum_size = Vector2(220, 0)
+	btn_panel.alignment = BoxContainer.ALIGNMENT_CENTER
+	btn_panel.add_theme_constant_override("separation", 15)
+	hbox.add_child(btn_panel)
+
+	var title = Label.new()
+	title.text = "PAUSED"
+	title.add_theme_font_size_override("font_size", 42)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	btn_panel.add_child(title)
+
+	var spacer = Control.new()
+	spacer.custom_minimum_size = Vector2(0, 15)
+	btn_panel.add_child(spacer)
+
+	_add_pause_btn(btn_panel, "RESUME", func():
+		_destroy_overlay()
+		is_paused = false
+		get_tree().paused = false
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	)
+
+	_add_pause_btn(btn_panel, "MAIN MENU", func():
+		_destroy_overlay()
+		is_paused = false
+		get_tree().paused = false
+		GameManager.reset_session()
+		get_tree().change_scene_to_file("res://scenes/ui/main_menu.tscn")
+	)
+
+	# Right side — movelist
+	var ml_panel = HBoxContainer.new()
+	ml_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ml_panel.add_theme_constant_override("separation", 20)
+	hbox.add_child(ml_panel)
+
+	_build_movelist_column(ml_panel, "P1", GameManager.p1_fighter_class)
+	_build_movelist_column(ml_panel, "P2", GameManager.p2_fighter_class)
+
+
+func _add_pause_btn(parent: Control, text: String, callback: Callable) -> void:
+	var btn = Button.new()
+	btn.text = text
+	btn.custom_minimum_size = Vector2(200, 45)
+	btn.add_theme_font_size_override("font_size", 22)
+	btn.pressed.connect(callback)
+	btn.process_mode = Node.PROCESS_MODE_ALWAYS
+	parent.add_child(btn)
+
+
+
+func _make_header(text: String) -> Label:
+	var lbl = Label.new()
+	lbl.text = "── " + text + " ──"
+	lbl.add_theme_font_size_override("font_size", 18)
+	lbl.add_theme_color_override("font_color", Color(0.5, 0.8, 1.0))
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	return lbl
+
+
+func _make_move_row(input_text: String, name_text: String, level: String, detail: String) -> HBoxContainer:
+	var row = HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+
+	var input_lbl = Label.new()
+	input_lbl.text = input_text
+	input_lbl.custom_minimum_size = Vector2(100, 0)
+	input_lbl.add_theme_font_size_override("font_size", 15)
+	input_lbl.add_theme_color_override("font_color", Color(1.0, 0.9, 0.5))
+	row.add_child(input_lbl)
+
+	var name_lbl = Label.new()
+	name_lbl.text = name_text
+	name_lbl.custom_minimum_size = Vector2(140, 0)
+	name_lbl.add_theme_font_size_override("font_size", 14)
+	row.add_child(name_lbl)
+
+	if level != "":
+		var level_lbl = Label.new()
+		level_lbl.text = level
+		level_lbl.custom_minimum_size = Vector2(50, 0)
+		level_lbl.add_theme_font_size_override("font_size", 13)
+		match level:
+			"High":
+				level_lbl.add_theme_color_override("font_color", Color(1.0, 0.4, 0.4))
+			"Mid":
+				level_lbl.add_theme_color_override("font_color", Color(1.0, 0.8, 0.3))
+			"Low":
+				level_lbl.add_theme_color_override("font_color", Color(0.4, 0.8, 1.0))
+		row.add_child(level_lbl)
+
+	var detail_lbl = Label.new()
+	detail_lbl.text = detail
+	detail_lbl.add_theme_font_size_override("font_size", 12)
+	detail_lbl.add_theme_color_override("font_color", Color(0.6, 0.6, 0.7))
+	detail_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(detail_lbl)
+
+	return row
+
+
+
+
+func _build_movelist_column(parent: Control, player_name: String, fighter_class) -> void:
+	var panel = VBoxContainer.new()
+	panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	panel.add_theme_constant_override("separation", 3)
+	parent.add_child(panel)
+
+	var class_name_str = "DEFENSIVE" if fighter_class == GameManager.FighterClass.DEFENSIVE else "OFFENSIVE"
+	var header = Label.new()
+	header.text = player_name + " - " + class_name_str
+	header.add_theme_font_size_override("font_size", 22)
+	header.add_theme_color_override("font_color", Color(0.3, 0.8, 1.0) if player_name == "P1" else Color(1.0, 0.4, 0.4))
+	header.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	panel.add_child(header)
+
+	var scroll = ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	panel.add_child(scroll)
+
+	var move_vbox = VBoxContainer.new()
+	move_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	move_vbox.add_theme_constant_override("separation", 3)
+	scroll.add_child(move_vbox)
+
+	var shared_moves = [
+		["1", "Jab", "High", "i8, +6 hit, +1 block"],
+		["2", "Overhead Slam", "Mid", "i16, KD, -16 block, crushes highs"],
+		["3", "Low Kick", "Low", "i10, +4 hit, -13 block"],
+		["4", "Roundhouse", "High", "i14, KD/stagger, -14 block, homing"],
+		["d+3", "Leg Sweep", "Low", "i15, soft KD, -20 block"],
+	]
+
+	var def_moves = [
+		["1,1", "Cross Punch", "High", "i6, +4 hit, -5 block"],
+		["1,1,1", "Hook", "High", "i10, hard KD, -16 block"],
+		["df+1", "Mid Check", "Mid", "i11, +5 hit, -2 block"],
+		["d+1", "Track Mid", "Mid", "i12, +5 hit, -6 block, homing"],
+	]
+
+	var off_moves = [
+		["4,4", "Power Roundhouse", "High", "i11, hard KD, -16 block, natural"],
+		["d+3,3", "Double Slide", "Low", "i6, hard KD, -18 block, natural"],
+		["d+4", "Crouch Kick", "Low", "i11, +5 hit, -12 block"],
+		["d+4,4", "Kick -> Power RH", "L->H", "i11, hard KD, -16 block, natural"],
+	]
+
+	var atk_header = _make_header("ATTACKS")
+	move_vbox.add_child(atk_header)
+
+	for entry in shared_moves:
+		move_vbox.add_child(_make_move_row(entry[0], entry[1], entry[2], entry[3]))
+
+	var class_header = _make_header("CLASS MOVES")
+	move_vbox.add_child(class_header)
+
+	var class_moves = def_moves if fighter_class == GameManager.FighterClass.DEFENSIVE else off_moves
+	for entry in class_moves:
+		move_vbox.add_child(_make_move_row(entry[0], entry[1], entry[2], entry[3]))
+
+	var mov_header = _make_header("MOVEMENT")
+	move_vbox.add_child(mov_header)
+
+	var movement_list = [
+		["f,f", "Forward Dash", "", "Quick burst"],
+		["b,b", "Backdash", "", "Quick dodge"],
+		["b,b>db>b", "KBD", "", "Chain backdash"],
+		["f,n,d,df", "Crouch Dash", "", "Low rush"],
+		["up/dn x2", "Sidestep", "", "Lateral dodge"],
+		["d/b", "Crouch Block", "", "Blocks low+mid"],
+		["Neutral", "Stand Block", "", "Blocks high+mid"],
+		["qcb", "Backsway", "", "Lean back"],
+		["tap up", "Hop", "", "Low evasion"],
+	]
+
+	for entry in movement_list:
+		move_vbox.add_child(_make_move_row(entry[0], entry[1], entry[2], entry[3]))
+
+
+
+
+func _reset_positions() -> void:
+	fighter1.global_position = P1_SPAWN
+	fighter2.global_position = P2_SPAWN
+	fighter1.velocity = Vector3.ZERO
+	fighter2.velocity = Vector3.ZERO
+	fighter1.pending_knockback = Vector3.ZERO
+	fighter2.pending_knockback = Vector3.ZERO
+	# Reset to idle state
+	if fighter1.state_machine:
+		fighter1.state_machine.force_transition("Idle")
+	if fighter2.state_machine:
+		fighter2.state_machine.force_transition("Idle")
+	# Reset camera tracking to prevent inversion
+	var cam = get_node_or_null("FightCamera")
+	if cam and cam.has_method("reset_tracking"):
+		cam.reset_tracking()

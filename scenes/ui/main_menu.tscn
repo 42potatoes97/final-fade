@@ -1,0 +1,121 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/main_menu.gd" id="1_menu"]
+
+[node name="MainMenu" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource("1_menu")
+
+[node name="Background" type="ColorRect" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+color = Color(0.06, 0.06, 0.1, 1)
+
+[node name="VBox" type="VBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -200.0
+offset_top = -220.0
+offset_right = 200.0
+offset_bottom = 220.0
+theme_override_constants/separation = 15
+
+[node name="Title" type="Label" parent="VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 72
+text = "FINAL FADE"
+horizontal_alignment = 1
+
+[node name="Subtitle" type="Label" parent="VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+theme_override_colors/font_color = Color(0.6, 0.6, 0.7, 1)
+text = "Complexity Through Simplicity"
+horizontal_alignment = 1
+
+[node name="Spacer" type="Control" parent="VBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 30)
+
+[node name="VersusBtn" type="Button" parent="VBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 50)
+theme_override_font_sizes/font_size = 24
+text = "VERSUS"
+
+[node name="VersusSubmenu" type="VBoxContainer" parent="VBox"]
+layout_mode = 2
+visible = false
+theme_override_constants/separation = 8
+
+[node name="LocalBtn" type="Button" parent="VBox/VersusSubmenu"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 40)
+theme_override_font_sizes/font_size = 18
+text = "  LOCAL"
+
+[node name="OnlineBtn" type="Button" parent="VBox/VersusSubmenu"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 40)
+theme_override_font_sizes/font_size = 18
+text = "  ONLINE"
+
+[node name="TrainingBtn" type="Button" parent="VBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 50)
+theme_override_font_sizes/font_size = 24
+text = "TRAINING"
+
+[node name="AIBtn" type="Button" parent="VBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 50)
+theme_override_font_sizes/font_size = 24
+text = "AI"
+
+[node name="AISubmenu" type="VBoxContainer" parent="VBox"]
+layout_mode = 2
+visible = false
+theme_override_constants/separation = 8
+
+[node name="ScriptedBtn" type="Button" parent="VBox/AISubmenu"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 40)
+theme_override_font_sizes/font_size = 18
+text = "  SCRIPTED BOTS"
+
+[node name="RLBtn" type="Button" parent="VBox/AISubmenu"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 40)
+theme_override_font_sizes/font_size = 18
+text = "  RL AGENTS (Coming Soon)"
+disabled = true
+
+[node name="PoseEditorBtn" type="Button" parent="VBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 50)
+theme_override_font_sizes/font_size = 24
+text = "POSE EDITOR"
+
+[node name="QuitBtn" type="Button" parent="VBox"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 50)
+theme_override_font_sizes/font_size = 24
+text = "QUIT"
+
+[connection signal="pressed" from="VBox/VersusBtn" to="." method="_on_versus_pressed"]
+[connection signal="pressed" from="VBox/VersusSubmenu/LocalBtn" to="." method="_on_local_pressed"]
+[connection signal="pressed" from="VBox/VersusSubmenu/OnlineBtn" to="." method="_on_online_pressed"]
+[connection signal="pressed" from="VBox/TrainingBtn" to="." method="_on_training_pressed"]
+[connection signal="pressed" from="VBox/AIBtn" to="." method="_on_ai_pressed"]
+[connection signal="pressed" from="VBox/PoseEditorBtn" to="." method="_on_pose_editor_pressed"]
+[connection signal="pressed" from="VBox/AISubmenu/ScriptedBtn" to="." method="_on_scripted_ai_pressed"]
+[connection signal="pressed" from="VBox/QuitBtn" to="." method="_on_quit_pressed"]

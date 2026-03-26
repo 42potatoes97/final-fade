@@ -1,0 +1,103 @@
+[gd_scene load_steps=9 format=3 uid="uid://bstagemedium"]
+
+[sub_resource type="BoxShape3D" id="FloorShape"]
+size = Vector3(14, 0.2, 14)
+
+[sub_resource type="BoxMesh" id="FloorMesh"]
+size = Vector3(14, 0.2, 14)
+
+[sub_resource type="StandardMaterial3D" id="FloorMaterial"]
+albedo_color = Color(0.3, 0.3, 0.35, 1)
+
+[sub_resource type="StandardMaterial3D" id="WallMaterial"]
+albedo_color = Color(0.5, 0.15, 0.15, 1)
+
+[sub_resource type="BoxShape3D" id="WallShapeNS"]
+size = Vector3(14, 3, 0.3)
+
+[sub_resource type="BoxMesh" id="WallMeshNS"]
+size = Vector3(14, 3, 0.3)
+
+[sub_resource type="BoxShape3D" id="WallShapeEW"]
+size = Vector3(0.3, 3, 14)
+
+[sub_resource type="BoxMesh" id="WallMeshEW"]
+size = Vector3(0.3, 3, 14)
+
+[sub_resource type="Environment" id="Environment_001"]
+background_mode = 1
+background_color = Color(0.15, 0.15, 0.2, 1)
+ambient_light_source = 2
+ambient_light_color = Color(0.4, 0.4, 0.5, 1)
+ambient_light_energy = 0.5
+
+[node name="StageMedium" type="Node3D"]
+
+[node name="Floor" type="StaticBody3D" parent="."]
+collision_layer = 1
+collision_mask = 0
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Floor"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.1, 0)
+shape = SubResource("FloorShape")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Floor"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.1, 0)
+mesh = SubResource("FloorMesh")
+material_override = SubResource("FloorMaterial")
+
+[node name="WallNorth" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.5, 7)
+collision_layer = 1
+collision_mask = 0
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="WallNorth"]
+shape = SubResource("WallShapeNS")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="WallNorth"]
+mesh = SubResource("WallMeshNS")
+material_override = SubResource("WallMaterial")
+
+[node name="WallSouth" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.5, -7)
+collision_layer = 1
+collision_mask = 0
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="WallSouth"]
+shape = SubResource("WallShapeNS")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="WallSouth"]
+mesh = SubResource("WallMeshNS")
+material_override = SubResource("WallMaterial")
+
+[node name="WallEast" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 7, 1.5, 0)
+collision_layer = 1
+collision_mask = 0
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="WallEast"]
+shape = SubResource("WallShapeEW")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="WallEast"]
+mesh = SubResource("WallMeshEW")
+material_override = SubResource("WallMaterial")
+
+[node name="WallWest" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -7, 1.5, 0)
+collision_layer = 1
+collision_mask = 0
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="WallWest"]
+shape = SubResource("WallShapeEW")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="WallWest"]
+mesh = SubResource("WallMeshEW")
+material_override = SubResource("WallMaterial")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.866, -0.433, 0.25, 0, 0.5, 0.866, -0.5, -0.75, 0.433, 0, 10, 0)
+light_energy = 1.2
+shadow_enabled = true
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_001")

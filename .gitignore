@@ -1,0 +1,22 @@
+# Godot 4 specific
+.godot/
+*.import
+
+# Export
+export/
+*.exe
+*.pck
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+*.swp
+*.swo
+*~
+
+# User preferences
+*.cfg.bak

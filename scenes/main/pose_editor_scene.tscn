@@ -1,0 +1,82 @@
+[gd_scene load_steps=9 format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/pose_editor_scene.gd" id="1_editor"]
+[ext_resource type="PackedScene" path="res://scenes/characters/fighter_model.tscn" id="2_model"]
+
+[sub_resource type="BoxMesh" id="FloorMesh"]
+size = Vector3(6, 0.05, 6)
+
+[sub_resource type="StandardMaterial3D" id="FloorMat"]
+albedo_color = Color(0.2, 0.2, 0.25, 1)
+
+[sub_resource type="StandardMaterial3D" id="DummyMat"]
+albedo_color = Color(0.5, 0.3, 0.3, 0.6)
+transparency = 1
+
+[sub_resource type="CapsuleMesh" id="HurtboxMesh"]
+radius = 0.55
+height = 1.7
+
+[sub_resource type="CylinderMesh" id="RangeMesh"]
+top_radius = 2.0
+bottom_radius = 2.0
+height = 0.02
+
+[sub_resource type="StandardMaterial3D" id="RangeMat"]
+albedo_color = Color(1.0, 0.3, 0.3, 0.15)
+transparency = 1
+
+[sub_resource type="Environment" id="Env"]
+background_mode = 1
+background_color = Color(0.1, 0.1, 0.15, 1)
+ambient_light_source = 2
+ambient_light_color = Color(0.5, 0.5, 0.6, 1)
+ambient_light_energy = 0.6
+
+[node name="PoseEditorScene" type="Node3D"]
+script = ExtResource("1_editor")
+
+[node name="Fighter" type="Node3D" parent="."]
+
+[node name="Model" parent="Fighter" instance=ExtResource("2_model")]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0, 0, 0)
+
+[node name="Dummy" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -1.8)
+
+[node name="DummyModel" parent="Dummy" instance=ExtResource("2_model")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
+
+[node name="Hurtbox" type="MeshInstance3D" parent="Dummy"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.85, 0)
+mesh = SubResource("HurtboxMesh")
+material_override = SubResource("DummyMat")
+
+[node name="RangeIndicator" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.01, 0)
+mesh = SubResource("RangeMesh")
+material_override = SubResource("RangeMat")
+
+[node name="Floor" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.025, 0)
+mesh = SubResource("FloorMesh")
+material_override = SubResource("FloorMat")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.94, 0.342, 0, -0.342, 0.94, 0, 1.5, 3.5)
+current = true
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.866, -0.433, 0.25, 0, 0.5, 0.866, -0.5, -0.75, 0.433, 0, 5, 0)
+light_energy = 1.0
+shadow_enabled = true
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Env")
+
+[node name="UI" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+mouse_filter = 2

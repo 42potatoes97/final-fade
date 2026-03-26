@@ -1,0 +1,186 @@
+[gd_scene format=3 uid="uid://bfightermodel"]
+
+[ext_resource type="Script" path="res://scripts/fighter/fighter_model.gd" id="1_model"]
+
+[sub_resource type="StandardMaterial3D" id="SkinMat"]
+albedo_color = Color(0.85, 0.7, 0.55, 1)
+
+[sub_resource type="StandardMaterial3D" id="TorsoMat"]
+albedo_color = Color(0.2, 0.2, 0.6, 1)
+
+[sub_resource type="StandardMaterial3D" id="AbdomenMat"]
+albedo_color = Color(0.15, 0.15, 0.5, 1)
+
+[sub_resource type="StandardMaterial3D" id="LegMat"]
+albedo_color = Color(0.25, 0.25, 0.3, 1)
+
+[sub_resource type="StandardMaterial3D" id="HandMat"]
+albedo_color = Color(0.9, 0.75, 0.6, 1)
+
+[sub_resource type="StandardMaterial3D" id="FootMat"]
+albedo_color = Color(0.3, 0.15, 0.1, 1)
+
+[sub_resource type="BoxMesh" id="HeadMesh"]
+size = Vector3(0.22, 0.24, 0.22)
+
+[sub_resource type="BoxMesh" id="TorsoUpperMesh"]
+size = Vector3(0.5, 0.16, 0.2)
+
+[sub_resource type="BoxMesh" id="TorsoLowerMesh"]
+size = Vector3(0.38, 0.16, 0.18)
+
+[sub_resource type="BoxMesh" id="AbdomenMesh"]
+size = Vector3(0.28, 0.18, 0.18)
+
+[sub_resource type="BoxMesh" id="UpperArmMesh"]
+size = Vector3(0.28, 0.11, 0.11)
+
+[sub_resource type="BoxMesh" id="ForearmMesh"]
+size = Vector3(0.26, 0.1, 0.1)
+
+[sub_resource type="BoxMesh" id="HandMesh"]
+size = Vector3(0.1, 0.1, 0.07)
+
+[sub_resource type="BoxMesh" id="UpperLegMesh"]
+size = Vector3(0.14, 0.46, 0.14)
+
+[sub_resource type="BoxMesh" id="LowerLegMesh"]
+size = Vector3(0.12, 0.44, 0.12)
+
+[sub_resource type="BoxMesh" id="FootMesh"]
+size = Vector3(0.13, 0.06, 0.22)
+
+[node name="FighterModel" type="Node3D"]
+script = ExtResource("1_model")
+
+[node name="Root" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.88, 0)
+
+[node name="Abdomen" type="Node3D" parent="Root"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.12, 0)
+
+[node name="AbdomenMesh" type="MeshInstance3D" parent="Root/Abdomen"]
+mesh = SubResource("AbdomenMesh")
+material_override = SubResource("AbdomenMat")
+
+[node name="Torso" type="Node3D" parent="Root/Abdomen"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.24, 0)
+
+[node name="TorsoUpperMesh" type="MeshInstance3D" parent="Root/Abdomen/Torso"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.07, 0)
+mesh = SubResource("TorsoUpperMesh")
+material_override = SubResource("TorsoMat")
+
+[node name="TorsoLowerMesh" type="MeshInstance3D" parent="Root/Abdomen/Torso"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.09, 0)
+mesh = SubResource("TorsoLowerMesh")
+material_override = SubResource("TorsoMat")
+
+[node name="Head" type="Node3D" parent="Root/Abdomen/Torso"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.27, 0)
+
+[node name="HeadMesh" type="MeshInstance3D" parent="Root/Abdomen/Torso/Head"]
+mesh = SubResource("HeadMesh")
+material_override = SubResource("SkinMat")
+
+[node name="ShoulderL" type="Node3D" parent="Root/Abdomen/Torso"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.28, 0.08, 0)
+
+[node name="UpperArmL" type="Node3D" parent="Root/Abdomen/Torso/ShoulderL"]
+
+[node name="Mesh" type="MeshInstance3D" parent="Root/Abdomen/Torso/ShoulderL/UpperArmL"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.14, 0, 0)
+mesh = SubResource("UpperArmMesh")
+material_override = SubResource("SkinMat")
+
+[node name="ForearmL" type="Node3D" parent="Root/Abdomen/Torso/ShoulderL/UpperArmL"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.28, 0, 0)
+
+[node name="Mesh" type="MeshInstance3D" parent="Root/Abdomen/Torso/ShoulderL/UpperArmL/ForearmL"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.13, 0, 0)
+mesh = SubResource("ForearmMesh")
+material_override = SubResource("HandMat")
+
+[node name="HandL" type="Node3D" parent="Root/Abdomen/Torso/ShoulderL/UpperArmL/ForearmL"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.26, 0, 0)
+
+[node name="Mesh" type="MeshInstance3D" parent="Root/Abdomen/Torso/ShoulderL/UpperArmL/ForearmL/HandL"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.05, 0, 0)
+mesh = SubResource("HandMesh")
+material_override = SubResource("HandMat")
+
+[node name="ShoulderR" type="Node3D" parent="Root/Abdomen/Torso"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.28, 0.08, 0)
+
+[node name="UpperArmR" type="Node3D" parent="Root/Abdomen/Torso/ShoulderR"]
+
+[node name="Mesh" type="MeshInstance3D" parent="Root/Abdomen/Torso/ShoulderR/UpperArmR"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.14, 0, 0)
+mesh = SubResource("UpperArmMesh")
+material_override = SubResource("SkinMat")
+
+[node name="ForearmR" type="Node3D" parent="Root/Abdomen/Torso/ShoulderR/UpperArmR"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.28, 0, 0)
+
+[node name="Mesh" type="MeshInstance3D" parent="Root/Abdomen/Torso/ShoulderR/UpperArmR/ForearmR"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.13, 0, 0)
+mesh = SubResource("ForearmMesh")
+material_override = SubResource("HandMat")
+
+[node name="HandR" type="Node3D" parent="Root/Abdomen/Torso/ShoulderR/UpperArmR/ForearmR"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.26, 0, 0)
+
+[node name="Mesh" type="MeshInstance3D" parent="Root/Abdomen/Torso/ShoulderR/UpperArmR/ForearmR/HandR"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.05, 0, 0)
+mesh = SubResource("HandMesh")
+material_override = SubResource("HandMat")
+
+[node name="HipL" type="Node3D" parent="Root"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.1, 0, 0)
+
+[node name="UpperLegL" type="Node3D" parent="Root/HipL"]
+
+[node name="Mesh" type="MeshInstance3D" parent="Root/HipL/UpperLegL"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.23, 0)
+mesh = SubResource("UpperLegMesh")
+material_override = SubResource("LegMat")
+
+[node name="LowerLegL" type="Node3D" parent="Root/HipL/UpperLegL"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.46, 0)
+
+[node name="Mesh" type="MeshInstance3D" parent="Root/HipL/UpperLegL/LowerLegL"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.22, 0)
+mesh = SubResource("LowerLegMesh")
+material_override = SubResource("LegMat")
+
+[node name="FootL" type="Node3D" parent="Root/HipL/UpperLegL/LowerLegL"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.44, 0.03)
+
+[node name="Mesh" type="MeshInstance3D" parent="Root/HipL/UpperLegL/LowerLegL/FootL"]
+mesh = SubResource("FootMesh")
+material_override = SubResource("FootMat")
+
+[node name="HipR" type="Node3D" parent="Root"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.1, 0, 0)
+
+[node name="UpperLegR" type="Node3D" parent="Root/HipR"]
+
+[node name="Mesh" type="MeshInstance3D" parent="Root/HipR/UpperLegR"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.23, 0)
+mesh = SubResource("UpperLegMesh")
+material_override = SubResource("LegMat")
+
+[node name="LowerLegR" type="Node3D" parent="Root/HipR/UpperLegR"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.46, 0)
+
+[node name="Mesh" type="MeshInstance3D" parent="Root/HipR/UpperLegR/LowerLegR"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.22, 0)
+mesh = SubResource("LowerLegMesh")
+material_override = SubResource("LegMat")
+
+[node name="FootR" type="Node3D" parent="Root/HipR/UpperLegR/LowerLegR"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.44, 0.03)
+
+[node name="Mesh" type="MeshInstance3D" parent="Root/HipR/UpperLegR/LowerLegR/FootR"]
+mesh = SubResource("FootMesh")
+material_override = SubResource("FootMat")

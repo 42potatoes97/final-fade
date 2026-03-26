@@ -1,0 +1,50 @@
+MIXAMO IMPORT GUIDE FOR FINAL FADE
+====================================
+
+STEP 1: Go to https://www.mixamo.com (free Adobe account)
+
+STEP 2: Pick a CHARACTER
+   - Search "Y Bot" or "X Bot" (clean, low-poly humanoid)
+   - Or browse Characters tab for something you like
+   - Download: Format = FBX Binary (.fbx), Pose = T-Pose
+   - Save as: character.fbx
+
+STEP 3: Download ANIMATIONS (search each, apply to your character)
+   Download settings for ALL: FBX Binary, Without Skin, 60fps, No Keyframe Reduction
+
+   REQUIRED (core gameplay):
+   - "Fighting Idle"         → save as: fighting_idle.fbx
+   - "Walking"               → save as: walking.fbx
+   - "Walking Backwards"     → save as: walking_backward.fbx
+   - "Jab"                   → save as: jab.fbx
+   - "Cross Punch"           → save as: cross_punch.fbx
+   - "Hook Punch"            → save as: hook_punch.fbx
+   - "Roundhouse Kick"       → save as: roundhouse_kick.fbx
+   - "Low Kick" or "Mma Kick" → save as: low_kick.fbx
+   - "Crouching"             → save as: crouch.fbx
+   - "Dodge Back" or "Quick Step Back" → save as: dodge_back.fbx
+   - "Running" or "Sprint"   → save as: run_forward.fbx
+
+   NICE TO HAVE:
+   - "Hit Reaction"          → save as: hit_reaction.fbx
+   - "Knock Down"            → save as: knockdown.fbx
+   - "Getting Up"            → save as: getup.fbx
+   - "Blocking"              → save as: block.fbx
+   - "Side Step"             → save as: sidestep.fbx
+   - "Overhead Strike" or "Axe Kick" → save as: overhead_strike.fbx
+   - "Uppercut"              → save as: uppercut.fbx
+
+STEP 4: Place ALL downloaded .fbx files in this folder:
+   C:\Users\Pranav\personal_dev\final_fade\assets\mixamo\
+
+STEP 5: Open Godot → it will auto-import the FBX files
+   - The character.fbx will appear as a scene with skeleton
+   - Animation files will contain the animation clips
+
+STEP 6: Tell Claude "files are ready" and the integration will be automated!
+
+NOTES:
+- "Without Skin" means animation-only (no mesh), keeps file sizes small
+- The character.fbx has both the mesh AND skeleton
+- 60fps matches our game's physics tick rate
+- No Keyframe Reduction preserves animation quality

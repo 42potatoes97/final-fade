@@ -1,0 +1,40 @@
+[gd_scene format=3 uid="uid://udrw74u0eage"]
+
+[ext_resource type="PackedScene" uid="uid://bfighter001" path="res://scenes/characters/fighter.tscn" id="1_fighter"]
+[ext_resource type="PackedScene" uid="uid://bstagemedium" path="res://scenes/stages/stage_medium.tscn" id="2_stage"]
+[ext_resource type="Script" uid="uid://cm28y5a3gpo5n" path="res://scripts/main/fight_scene.gd" id="3_script"]
+[ext_resource type="Script" uid="uid://b745x4i5d2fir" path="res://scripts/camera/fight_camera.gd" id="4_camera"]
+[ext_resource type="Script" path="res://scripts/ui/pose_editor.gd" id="5_poseeditor"]
+[ext_resource type="Script" path="res://scripts/ui/hud.gd" id="6_hud"]
+[ext_resource type="Script" path="res://scripts/ui/training_hud.gd" id="8_training"]
+
+[node name="FightScene" type="Node3D" unique_id=1944169486]
+script = ExtResource("3_script")
+
+[node name="Stage" parent="." unique_id=2016957471 instance=ExtResource("2_stage")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
+
+[node name="Fighter1" parent="." unique_id=2042458688 instance=ExtResource("1_fighter")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -3, 0, 0)
+
+[node name="Fighter2" parent="." unique_id=285710171 instance=ExtResource("1_fighter")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3, 0, 0)
+player_id = 2
+
+[node name="FightCamera" type="Camera3D" parent="." unique_id=1657320963]
+transform = Transform3D(1, 0, 0, 0, 0.94, 0.342, 0, -0.342, 0.94, 0, 3.5, 6)
+current = true
+script = ExtResource("4_camera")
+
+[node name="HUD" type="CanvasLayer" parent="."]
+script = ExtResource("6_hud")
+
+[node name="TrainingHUD" type="CanvasLayer" parent="."]
+script = ExtResource("8_training")
+
+[node name="PoseEditor" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+script = ExtResource("5_poseeditor")

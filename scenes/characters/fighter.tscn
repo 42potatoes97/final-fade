@@ -1,0 +1,108 @@
+[gd_scene load_steps=25 format=3 uid="uid://bfighter001"]
+
+[ext_resource type="Script" path="res://scripts/fighter/fighter_controller.gd" id="1_controller"]
+[ext_resource type="Script" path="res://scripts/fighter/fighter_state_machine.gd" id="2_statemachine"]
+[ext_resource type="Script" path="res://scripts/fighter/states/idle_state.gd" id="3_idle"]
+[ext_resource type="Script" path="res://scripts/fighter/states/walk_forward_state.gd" id="4_walkfwd"]
+[ext_resource type="Script" path="res://scripts/fighter/states/walk_backward_state.gd" id="5_walkback"]
+[ext_resource type="Script" path="res://scripts/fighter/states/dash_forward_state.gd" id="6_dashfwd"]
+[ext_resource type="Script" path="res://scripts/fighter/states/backdash_state.gd" id="7_backdash"]
+[ext_resource type="Script" path="res://scripts/fighter/states/sidestep_up_state.gd" id="8_ssup"]
+[ext_resource type="Script" path="res://scripts/fighter/states/sidestep_down_state.gd" id="9_ssdown"]
+[ext_resource type="Script" path="res://scripts/fighter/states/sidewalk_up_state.gd" id="10_swup"]
+[ext_resource type="Script" path="res://scripts/fighter/states/sidewalk_down_state.gd" id="11_swdown"]
+[ext_resource type="Script" path="res://scripts/fighter/states/crouch_state.gd" id="12_crouch"]
+[ext_resource type="Script" path="res://scripts/fighter/states/crouch_dash_state.gd" id="13_crouchdash"]
+[ext_resource type="Script" path="res://scripts/fighter/states/backsway_state.gd" id="14_backsway"]
+[ext_resource type="Script" path="res://scripts/fighter/states/hop_state.gd" id="15_hop"]
+[ext_resource type="PackedScene" path="res://scenes/characters/fighter_model.tscn" id="16_model"]
+[ext_resource type="Script" path="res://scripts/fighter/states/attack_state.gd" id="17_attack"]
+[ext_resource type="Script" path="res://scripts/fighter/states/knockdown_state.gd" id="18_knockdown"]
+[ext_resource type="Script" path="res://scripts/fighter/states/getup_state.gd" id="19_getup"]
+[ext_resource type="Script" path="res://scripts/fighter/states/hitstun_state.gd" id="20_hitstun"]
+[ext_resource type="Script" path="res://scripts/fighter/states/blockstun_state.gd" id="21_blockstun"]
+[ext_resource type="Script" path="res://scripts/fighter/hit_system.gd" id="22_hitsystem"]
+[ext_resource type="Script" path="res://scripts/fighter/states/getup_kick_state.gd" id="23_getupkick"]
+[ext_resource type="Script" path="res://scripts/fighter/states/side_roll_state.gd" id="24_sideroll"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_001"]
+radius = 0.3
+height = 1.7
+
+[node name="Fighter" type="CharacterBody3D"]
+collision_layer = 3
+collision_mask = 3
+script = ExtResource("1_controller")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.85, 0)
+shape = SubResource("CapsuleShape3D_001")
+
+[node name="Model" parent="." instance=ExtResource("16_model")]
+transform = Transform3D(-1, 0, 0, 0, 1, 0, 0, 0, -1, 0, 0, 0)
+
+[node name="HitSystem" type="Node3D" parent="."]
+script = ExtResource("22_hitsystem")
+
+[node name="StateMachine" type="Node" parent="."]
+script = ExtResource("2_statemachine")
+
+[node name="Idle" type="Node" parent="StateMachine"]
+script = ExtResource("3_idle")
+
+[node name="WalkForward" type="Node" parent="StateMachine"]
+script = ExtResource("4_walkfwd")
+
+[node name="WalkBackward" type="Node" parent="StateMachine"]
+script = ExtResource("5_walkback")
+
+[node name="DashForward" type="Node" parent="StateMachine"]
+script = ExtResource("6_dashfwd")
+
+[node name="Backdash" type="Node" parent="StateMachine"]
+script = ExtResource("7_backdash")
+
+[node name="SidestepUp" type="Node" parent="StateMachine"]
+script = ExtResource("8_ssup")
+
+[node name="SidestepDown" type="Node" parent="StateMachine"]
+script = ExtResource("9_ssdown")
+
+[node name="SidewalkUp" type="Node" parent="StateMachine"]
+script = ExtResource("10_swup")
+
+[node name="SidewalkDown" type="Node" parent="StateMachine"]
+script = ExtResource("11_swdown")
+
+[node name="Crouch" type="Node" parent="StateMachine"]
+script = ExtResource("12_crouch")
+
+[node name="CrouchDash" type="Node" parent="StateMachine"]
+script = ExtResource("13_crouchdash")
+
+[node name="Backsway" type="Node" parent="StateMachine"]
+script = ExtResource("14_backsway")
+
+[node name="Hop" type="Node" parent="StateMachine"]
+script = ExtResource("15_hop")
+
+[node name="Attack" type="Node" parent="StateMachine"]
+script = ExtResource("17_attack")
+
+[node name="Knockdown" type="Node" parent="StateMachine"]
+script = ExtResource("18_knockdown")
+
+[node name="Getup" type="Node" parent="StateMachine"]
+script = ExtResource("19_getup")
+
+[node name="GetupKick" type="Node" parent="StateMachine"]
+script = ExtResource("23_getupkick")
+
+[node name="SideRoll" type="Node" parent="StateMachine"]
+script = ExtResource("24_sideroll")
+
+[node name="Hitstun" type="Node" parent="StateMachine"]
+script = ExtResource("20_hitstun")
+
+[node name="Blockstun" type="Node" parent="StateMachine"]
+script = ExtResource("21_blockstun")
