@@ -75,11 +75,60 @@ func _on_message(topic: String, payload: String) -> void:
 	if parsed == null or not parsed is Dictionary:
 		return
 
-	var rid: String = parsed.get("room_id", "")
-	if rid.is_empty():
+	# --- Strict field validation ---
+
+	# room_id: String, max 16 chars, alphanumeric only
+	var rid = parsed.get("room_id")
+	if not rid is String or rid.is_empty() or rid.length() > 16:
+		return
+	var _alnum_regex := RegEx.new()
+	_alnum_regex.compile("^[a-zA-Z0-9]+$")
+	if _alnum_regex.search(rid) == null:
 		return
 
-	var status: String = parsed.get("status", "")
+	# host_name: String, max 32 chars
+	var host_name = parsed.get("host_name")
+	if not host_name is String or host_name.length() > 32:
+		return
+
+	# transport: must be "enet" or "webrtc"
+	var transport = parsed.get("transport")
+	if not transport is String or (transport != "enet" and transport != "webrtc"):
+		return
+
+	# region: String, max 4 chars
+	var region = parsed.get("region")
+	if not region is String or region.length() > 4:
+		return
+
+	# status: must be "waiting", "full", or "closed"
+	var status = parsed.get("status")
+	if not status is String or (status != "waiting" and status != "full" and status != "closed"):
+		return
+
+	# input_delay: int, range 1-5
+	var input_delay = parsed.get("input_delay")
+	if not (input_delay is int or input_delay is float):
+		return
+	var id_int: int = int(input_delay)
+	if id_int < 1 or id_int > 5:
+		return
+
+	# timestamp: must be a number
+	var ts = parsed.get("timestamp")
+	if not (ts is int or ts is float):
+		return
+
+	# Strip to only validated fields
+	var clean_room: Dictionary = {
+		"room_id": rid,
+		"host_name": host_name,
+		"transport": transport,
+		"region": region,
+		"status": status,
+		"input_delay": id_int,
+		"timestamp": ts,
+	}
 
 	if status == "closed":
 		if rooms.has(rid):
@@ -87,13 +136,17 @@ func _on_message(topic: String, payload: String) -> void:
 			room_removed.emit(rid)
 		return
 
+	# Enforce max 100 rooms to prevent memory DoS
+	if not rooms.has(rid) and rooms.size() >= 100:
+		return
+
 	# Update or add room
-	parsed["last_seen"] = _get_unix_time()
+	clean_room["last_seen"] = _get_unix_time()
 	var is_new: bool = not rooms.has(rid)
-	rooms[rid] = parsed
+	rooms[rid] = clean_room
 
 	if is_new:
-		room_added.emit(parsed)
+		room_added.emit(clean_room)
 
 
 func _cleanup_stale() -> void:

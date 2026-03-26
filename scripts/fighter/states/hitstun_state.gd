@@ -8,6 +8,7 @@ var frame_counter: int = 0
 
 func enter(_prev_state: String) -> void:
 	frame_counter = 0
+	fighter.is_blocking_on_getup = false
 	var m = get_model()
 	if m:
 		m.idle_bob_active = false

@@ -29,6 +29,7 @@ var _sent_inputs: Dictionary = {}
 
 # Security
 var _session_key: PackedByteArray = PackedByteArray()
+var _packet_key: PackedByteArray = PackedByteArray()  # Derived from session key for HMAC
 var _auth_nonce: PackedByteArray = PackedByteArray()
 var _auth_timer: float = 0.0
 var _auth_pending: bool = false
@@ -150,6 +151,7 @@ func disconnect_peer() -> void:
 	remote_peer_id = -1
 	_sent_inputs.clear()
 	_session_key = PackedByteArray()
+	_packet_key = PackedByteArray()
 	_auth_pending = false
 	# Remove lobby listing
 	if _lobby:
@@ -184,8 +186,11 @@ func send_input(frame: int, input_bits: int) -> void:
 		data.encode_u32(offset, f)
 		data[offset + 4] = _sent_inputs.get(f, 0)
 
-	# Append CRC32 for integrity
-	data = CryptoUtils.append_crc32(data)
+	# Append HMAC for authenticated integrity (or CRC32 fallback if no key yet)
+	if _packet_key.size() > 0:
+		data = CryptoUtils.sign_packet(data, _packet_key)
+	else:
+		data = CryptoUtils.append_crc32(data)
 
 	if remote_peer_id > 0:
 		multiplayer.multiplayer_peer.put_packet(data)
@@ -237,14 +242,18 @@ func _process_auth_packet(data: PackedByteArray) -> void:
 
 	if is_host:
 		if msg_type == AuthHandshake.HandshakeMsg.HELLO:
-			# Send CHALLENGE
+			# Send CHALLENGE with hashed nonce
 			var challenge: PackedByteArray = AuthHandshake.create_challenge(_auth_nonce)
 			_send_reliable(challenge)
 		elif msg_type == AuthHandshake.HandshakeMsg.RESPONSE:
-			# Verify HMAC
+			# Verify HMAC — joiner computed HMAC(session_key, nonce_hash)
+			# We compute the same: hash our nonce, then verify
+			var nonce_hash: PackedByteArray = AuthHandshake._hash_for_challenge(_auth_nonce)
+			var expected_hmac: PackedByteArray = CryptoUtils.hmac_sha256(_session_key, nonce_hash)
 			var response_hmac: PackedByteArray = Marshalls.base64_to_raw(parsed.get("hmac", ""))
-			if AuthHandshake.verify_response(response_hmac, _session_key, _auth_nonce):
-				# Auth success
+			if AuthHandshake.verify_response(response_hmac, _session_key, nonce_hash):
+				# Auth success — derive packet signing key
+				_derive_packet_key()
 				var pm = get_node_or_null("/root/ProfileManager")
 				var host_profile: Dictionary = pm.get_display_identity() if pm else {}
 				var ok_packet: PackedByteArray = AuthHandshake.create_auth_ok(host_profile)
@@ -263,11 +272,12 @@ func _process_auth_packet(data: PackedByteArray) -> void:
 	else:
 		# Joiner
 		if msg_type == AuthHandshake.HandshakeMsg.CHALLENGE:
-			var nonce_b64: String = parsed.get("nonce", "")
-			var nonce: PackedByteArray = Marshalls.base64_to_raw(nonce_b64)
-			var response: PackedByteArray = AuthHandshake.create_response(nonce, _session_key)
+			var nonce_hash_b64: String = parsed.get("nonce_hash", "")
+			var nonce_hash: PackedByteArray = Marshalls.base64_to_raw(nonce_hash_b64)
+			var response: PackedByteArray = AuthHandshake.create_response(nonce_hash, _session_key)
 			_send_reliable(response)
 		elif msg_type == AuthHandshake.HandshakeMsg.AUTH_OK:
+			_derive_packet_key()
 			_auth_pending = false
 			connection_state = ConnectionState.CONNECTED
 			auth_completed.emit(parsed.get("profile", {}))
@@ -275,6 +285,15 @@ func _process_auth_packet(data: PackedByteArray) -> void:
 		elif msg_type == AuthHandshake.HandshakeMsg.AUTH_FAIL:
 			_auth_pending = false
 			auth_failed.emit(parsed.get("reason", "Unknown"))
+
+
+func _derive_packet_key() -> void:
+	# Derive a separate key for packet HMAC from the session key
+	var ctx: HashingContext = HashingContext.new()
+	ctx.start(HashingContext.HASH_SHA256)
+	ctx.update(_session_key)
+	ctx.update("finalfade-packet-hmac".to_utf8_buffer())
+	_packet_key = ctx.finish()
 
 
 func _send_reliable(data: PackedByteArray) -> void:
@@ -405,9 +424,15 @@ func _poll_packets() -> void:
 		if _quality.is_pong_packet(data):
 			_quality.process_pong(data)
 			continue
-		# Verify CRC32
+		# Verify packet integrity (HMAC if key available, CRC32 fallback)
+		if _packet_key.size() > 0:
+			if not CryptoUtils.verify_packet(data, _packet_key):
+				continue  # Drop forged/corrupted packet
+			var payload: PackedByteArray = CryptoUtils.strip_mac(data)
+			_parse_input_packet(payload)
+			continue
 		if not CryptoUtils.verify_crc32(data):
-			continue  # Drop corrupted packet
+			continue
 		var payload: PackedByteArray = CryptoUtils.strip_crc32(data)
 		_parse_input_packet(payload)
 

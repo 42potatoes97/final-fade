@@ -91,6 +91,13 @@ func check_hit() -> Dictionary:
 	if opponent == null:
 		return {}
 
+	# Attacker must still be in Attack state to land a hit
+	# Prevents hitting while in hitstun/blockstun (trade race condition)
+	if fighter.state_machine:
+		var my_state: String = fighter.state_machine.current_state_name()
+		if my_state != "Attack":
+			return {}
+
 	# Invulnerability check (backdash i-frames)
 	if opponent.is_invulnerable:
 		return {}

@@ -236,9 +236,15 @@ func load_state(s: Dictionary) -> void:
 	phase = s.get("phase", "startup")
 	hit_confirmed = s.get("hit", false)
 	whiff_played = s.get("whiff", false)
-	var cmd = s.get("move_cmd", "")
+	var cmd: String = s.get("move_cmd", "")
 	if cmd != "" and fighter and fighter.move_registry:
 		current_move = fighter.move_registry.moves.get(cmd)
+		# Re-activate hitbox so hit detection works after rollback restore
+		if current_move and fighter._hit_system:
+			fighter._hit_system.activate(current_move.pose_name)
+			# Restore has_hit state so we don't double-hit
+			if hit_confirmed:
+				fighter._hit_system.has_hit = true
 
 
 func _play_sfx(stream: AudioStream) -> void:

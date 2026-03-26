@@ -7,63 +7,80 @@ class_name CryptoUtils
 const CODE_CHARS: String = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 
-# --- AES-256 Encryption for Room Codes ---
+# --- AES-256-CBC Encryption for Room Codes ---
 
 static func generate_session_key() -> PackedByteArray:
-	# 16-byte random key for AES-256 (padded to 32 bytes internally)
+	# Full 32-byte key for AES-256 (no padding/mirroring)
 	var crypto: Crypto = Crypto.new()
-	return crypto.generate_random_bytes(16)
+	return crypto.generate_random_bytes(32)
+
+
+static func _derive_key(session_key: PackedByteArray) -> PackedByteArray:
+	# HKDF-like key derivation: SHA256(session_key + "finalfade-room-key")
+	var ctx: HashingContext = HashingContext.new()
+	ctx.start(HashingContext.HASH_SHA256)
+	ctx.update(session_key)
+	ctx.update("finalfade-room-key".to_utf8_buffer())
+	return ctx.finish()  # Always 32 bytes
 
 
 static func encrypt_room_data(ip: String, port: int, session_key: PackedByteArray) -> PackedByteArray:
-	# Pack IP:port into 8 bytes, encrypt with AES-ECB
+	# Pack IP:port into 16 bytes, encrypt with AES-256-CBC + random IV
 	var parts: PackedStringArray = ip.split(".")
 	if parts.size() != 4:
 		return PackedByteArray()
 
 	var plaintext: PackedByteArray = PackedByteArray()
-	plaintext.resize(16)  # AES block size
+	plaintext.resize(16)  # One AES block
 	for i in range(4):
 		plaintext[i] = int(parts[i]) & 0xFF
 	plaintext[4] = (port >> 8) & 0xFF
 	plaintext[5] = port & 0xFF
-	# Bytes 6-15: random padding for uniqueness
+	# Bytes 6-15: random padding for uniqueness per encryption
 	var crypto: Crypto = Crypto.new()
 	var padding: PackedByteArray = crypto.generate_random_bytes(10)
 	for i in range(10):
 		plaintext[6 + i] = padding[i]
 
-	# Pad key to 32 bytes for AES-256
-	var key_32: PackedByteArray = PackedByteArray()
-	key_32.resize(32)
-	for i in range(16):
-		key_32[i] = session_key[i]
-		key_32[16 + i] = session_key[i]  # Mirror for padding
+	# Generate random IV for CBC mode
+	var iv: PackedByteArray = crypto.generate_random_bytes(16)
+	var key_32: PackedByteArray = _derive_key(session_key)
 
 	var aes: AESContext = AESContext.new()
-	aes.start(AESContext.MODE_ECB_ENCRYPT, key_32)
+	aes.start(AESContext.MODE_CBC_ENCRYPT, key_32, iv)
 	var ciphertext: PackedByteArray = aes.update(plaintext)
 	aes.finish()
-	return ciphertext
+
+	# Return IV + ciphertext (IV is not secret, needed for decryption)
+	var result: PackedByteArray = PackedByteArray()
+	result.append_array(iv)
+	result.append_array(ciphertext)
+	return result  # 32 bytes: [16B IV][16B ciphertext]
 
 
-static func decrypt_room_data(ciphertext: PackedByteArray, session_key: PackedByteArray) -> Dictionary:
-	if ciphertext.size() != 16:
+static func decrypt_room_data(encrypted: PackedByteArray, session_key: PackedByteArray) -> Dictionary:
+	if encrypted.size() != 32:
 		return {"ip": "", "port": 0, "valid": false}
 
-	var key_32: PackedByteArray = PackedByteArray()
-	key_32.resize(32)
-	for i in range(16):
-		key_32[i] = session_key[i]
-		key_32[16 + i] = session_key[i]
+	var iv: PackedByteArray = encrypted.slice(0, 16)
+	var ciphertext: PackedByteArray = encrypted.slice(16, 32)
+	var key_32: PackedByteArray = _derive_key(session_key)
 
 	var aes: AESContext = AESContext.new()
-	aes.start(AESContext.MODE_ECB_DECRYPT, key_32)
+	aes.start(AESContext.MODE_CBC_DECRYPT, key_32, iv)
 	var plaintext: PackedByteArray = aes.update(ciphertext)
 	aes.finish()
 
 	var ip: String = "%d.%d.%d.%d" % [plaintext[0], plaintext[1], plaintext[2], plaintext[3]]
 	var port: int = (plaintext[4] << 8) | plaintext[5]
+
+	# Basic validation
+	for i in range(4):
+		if plaintext[i] > 255:
+			return {"ip": "", "port": 0, "valid": false}
+	if port <= 0 or port > 65535:
+		return {"ip": "", "port": 0, "valid": false}
+
 	return {"ip": ip, "port": port, "valid": true}
 
 
@@ -121,14 +138,14 @@ static func code_to_bytes(code: String, expected_size: int) -> PackedByteArray:
 static func generate_room_code(ip: String, port: int) -> Dictionary:
 	# Returns {code: String, session_key: PackedByteArray}
 	var session_key: PackedByteArray = generate_session_key()
-	var ciphertext: PackedByteArray = encrypt_room_data(ip, port, session_key)
-	if ciphertext.is_empty():
+	var encrypted: PackedByteArray = encrypt_room_data(ip, port, session_key)
+	if encrypted.is_empty():
 		return {"code": "ERROR", "session_key": PackedByteArray()}
 
-	# Combine key + ciphertext: [16B key][16B cipher] = 32 bytes
+	# Combine key + encrypted: [32B key][32B IV+cipher] = 64 bytes
 	var combined: PackedByteArray = PackedByteArray()
 	combined.append_array(session_key)
-	combined.append_array(ciphertext)
+	combined.append_array(encrypted)
 
 	var code: String = bytes_to_code(combined)
 	return {"code": code, "session_key": session_key}
@@ -136,13 +153,13 @@ static func generate_room_code(ip: String, port: int) -> Dictionary:
 
 static func decode_room_code(code: String) -> Dictionary:
 	# Returns {ip, port, session_key, valid}
-	var combined: PackedByteArray = code_to_bytes(code, 32)
-	if combined.size() != 32:
+	var combined: PackedByteArray = code_to_bytes(code, 64)
+	if combined.size() != 64:
 		return {"ip": "", "port": 0, "session_key": PackedByteArray(), "valid": false}
 
-	var session_key: PackedByteArray = combined.slice(0, 16)
-	var ciphertext: PackedByteArray = combined.slice(16, 32)
-	var decrypted: Dictionary = decrypt_room_data(ciphertext, session_key)
+	var session_key: PackedByteArray = combined.slice(0, 32)
+	var encrypted: PackedByteArray = combined.slice(32, 64)
+	var decrypted: Dictionary = decrypt_room_data(encrypted, session_key)
 	decrypted["session_key"] = session_key
 	return decrypted
 
@@ -228,6 +245,35 @@ static func hmac_sha256(key: PackedByteArray, message: PackedByteArray) -> Packe
 static func generate_nonce() -> PackedByteArray:
 	var crypto: Crypto = Crypto.new()
 	return crypto.generate_random_bytes(32)
+
+
+# --- HMAC-based Packet Signing (replaces CRC32 for authenticated integrity) ---
+
+static func sign_packet(data: PackedByteArray, key: PackedByteArray) -> PackedByteArray:
+	# Append truncated HMAC-SHA256 (8 bytes) for authenticated integrity
+	var mac: PackedByteArray = hmac_sha256(key, data)
+	var result: PackedByteArray = data.duplicate()
+	result.append_array(mac.slice(0, 8))  # Truncated to 8 bytes (64-bit security)
+	return result
+
+
+static func verify_packet(data: PackedByteArray, key: PackedByteArray) -> bool:
+	if data.size() < 9:  # At least 1 byte payload + 8 bytes MAC
+		return false
+	var payload: PackedByteArray = data.slice(0, data.size() - 8)
+	var received_mac: PackedByteArray = data.slice(data.size() - 8)
+	var expected_mac: PackedByteArray = hmac_sha256(key, payload).slice(0, 8)
+	# Constant-time comparison
+	var diff: int = 0
+	for i in range(8):
+		diff = diff | (received_mac[i] ^ expected_mac[i])
+	return diff == 0
+
+
+static func strip_mac(data: PackedByteArray) -> PackedByteArray:
+	if data.size() < 9:
+		return data
+	return data.slice(0, data.size() - 8)
 
 
 # --- Big Number Helpers (for base conversion of 32-byte values) ---

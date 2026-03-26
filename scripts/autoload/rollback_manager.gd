@@ -93,17 +93,18 @@ func network_tick() -> void:
 		var rollback_frame = _find_rollback_frame()
 
 		if rollback_frame >= 0:
-			# 4. ROLLBACK
-			_load_snapshot(rollback_frame)
-
-			# 5. Re-simulate from rollback_frame to current_frame
-			is_resimulating = true
-			for f in range(rollback_frame, current_frame):
-				var p1_input = _get_input(1, f)
-				var p2_input = _get_input(2, f)
-				_simulate_frame(p1_input, p2_input, fixed_delta)
-				_save_snapshot(f + 1)
-			is_resimulating = false
+			# Clamp rollback to max allowed range
+			var min_frame: int = maxi(rollback_frame, current_frame - max_rollback_frames)
+			# 4. ROLLBACK — load snapshot, skip if not available
+			if _load_snapshot(min_frame):
+				# 5. Re-simulate from rollback_frame to current_frame
+				is_resimulating = true
+				for f in range(min_frame, current_frame):
+					var p1_input: int = _get_input(1, f)
+					var p2_input: int = _get_input(2, f)
+					_simulate_frame(p1_input, p2_input, fixed_delta)
+					_save_snapshot(f + 1)
+				is_resimulating = false
 
 	# 6. Check if we're too far ahead — freeze if necessary
 	if _should_freeze():
@@ -204,16 +205,17 @@ func _save_snapshot(frame: int) -> void:
 	snap["gm"] = GameManager.get_game_state()
 
 
-func _load_snapshot(frame: int) -> void:
-	var idx = frame % BUFFER_SIZE
-	var snapshot = state_buffer[idx]
+func _load_snapshot(frame: int) -> bool:
+	var idx: int = frame % BUFFER_SIZE
+	var snapshot: Dictionary = state_buffer[idx]
 	if snapshot.get("frame", -1) != frame:
-		push_warning("RollbackManager: No snapshot for frame %d" % frame)
-		return
+		push_warning("RollbackManager: No snapshot for frame %d (slot has frame %d)" % [frame, snapshot.get("frame", -1)])
+		return false
 
 	fighter1.load_state(snapshot["f1"])
 	fighter2.load_state(snapshot["f2"])
 	GameManager.set_game_state(snapshot["gm"])
+	return true
 
 
 func _on_remote_input(frame: int, input_bits: int) -> void:

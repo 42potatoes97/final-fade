@@ -62,23 +62,24 @@ func handle_input(input_bits: int) -> String:
 
 	if holding_down and holding_back:
 		saw_db = true  # d/b = KBD cancel
+		# Recovery: if player hit d alone then corrected to d/b, allow KBD
+		# This makes the input more forgiving — d→d/b is treated as sloppy d/b
+		if saw_down_alone:
+			saw_down_alone = false  # Recovered from d alone
 		fighter.is_crouching = true
 
 	# Detect d/b released to neutral (the "free back" input in Tekken)
 	if saw_db and not holding_down and not holding_back:
 		db_released_to_neutral = true
 
-	# --- Backsway: d alone at any point = sloppy KBD, punish with backsway ---
-	# Like Nina in old Tekken — pressing d instead of d/b gives backsway
-	if saw_down_alone and (holding_back and not holding_down):
-		return "Backsway"
-	if saw_down_alone and saw_db and holding_back and not holding_down:
+	# --- Backsway: d alone WITHOUT d/b correction → sloppy KBD → backsway ---
+	if saw_down_alone and not saw_db and (holding_back and not holding_down):
 		return "Backsway"
 
 	# --- KBD: d/b during cancel window, then release ---
 	var in_kbd_window = frame_counter >= KBD_WINDOW_START and frame_counter <= KBD_WINDOW_END
 
-	if saw_db and not saw_down_alone and in_kbd_window:
+	if saw_db and in_kbd_window:
 		# Option 1: Released d/b to neutral — "free back" triggers new backdash
 		if db_released_to_neutral:
 			return "Backdash"
