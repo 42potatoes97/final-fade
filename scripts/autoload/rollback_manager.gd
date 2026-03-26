@@ -27,6 +27,8 @@ var _needs_mismatch_check: bool = false  # Set when new remote inputs arrive
 var auto_delay_enabled: bool = false  # Auto-adjust input_delay from ping
 var _ping_timer: float = 0.0
 const PING_INTERVAL: float = 0.5  # Send ping every 500ms
+var replay_manager = null  # ReplayManager, set by fight_scene for ranked
+var anticheat = null  # AnticheatValidator, set by fight_scene for ranked
 
 # Cached references
 var fighter1: CharacterBody3D = null
@@ -115,9 +117,21 @@ func network_tick() -> void:
 	var p2_input = _get_input(2, current_frame)
 	_simulate_frame(p1_input, p2_input, fixed_delta)
 
+	# Record confirmed inputs for replay (ranked matches only)
+	if replay_manager and not is_resimulating:
+		replay_manager.record_input(current_frame, 1, p1_input)
+		replay_manager.record_input(current_frame, 2, p2_input)
+
 	# 8. Save snapshot and advance
 	current_frame += 1
 	_save_snapshot(current_frame)
+
+	# Anti-cheat: periodic state hash exchange
+	if anticheat and _network and anticheat.should_exchange_hash(current_frame):
+		var snap = state_buffer[current_frame % BUFFER_SIZE]
+		var local_hash = anticheat.compute_state_hash(snap.get("gm", {}), snap.get("f1", {}), snap.get("f2", {}))
+		anticheat._last_local_hash = local_hash
+		_network._rpc_state_hash.rpc(local_hash)
 
 	# 9. Clean old history (infrequent — every 16 frames)
 	if current_frame % 16 == 0:
@@ -240,3 +254,8 @@ func _cleanup_old_data() -> void:
 	_prune_dict(local_input_history, cutoff)
 	_prune_dict(remote_input_history, cutoff)
 	_prune_dict(remote_input_predicted, cutoff)
+
+
+func clear_ranked() -> void:
+	replay_manager = null
+	anticheat = null

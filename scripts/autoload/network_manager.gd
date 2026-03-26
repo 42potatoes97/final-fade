@@ -12,6 +12,9 @@ signal auth_completed(remote_profile: Dictionary)
 signal auth_failed(reason: String)
 signal room_code_ready(code: String)
 signal transport_changed(transport_name: String)
+signal desync_detected(frame: int)
+signal match_proof_received(proof_data: Dictionary)
+signal match_signature_received(sig_data: String)
 
 enum ConnectionState { DISCONNECTED, HOSTING, JOINING, AUTHENTICATING, CONNECTED, IN_GAME }
 
@@ -40,6 +43,7 @@ var _signaling: SignalingClient = null
 var _webrtc_transport = null  # TransportWebRTC — loaded dynamically
 var _lobby: LobbyDiscovery = null
 var _quality: ConnectionQuality = ConnectionQuality.new()
+var _anticheat_ref = null  # Set by fight_scene, used for hash comparison
 
 # Public IP
 signal public_ip_fetched(ip: String)
@@ -156,6 +160,7 @@ func disconnect_peer() -> void:
 	# Remove lobby listing
 	if _lobby:
 		_lobby.remove_room()
+	_anticheat_ref = null
 	disconnected.emit()
 
 
@@ -317,6 +322,33 @@ func _rpc_rematch_request() -> void:
 	pass
 
 
+@rpc("any_peer", "unreliable")
+func _rpc_state_hash(hash_data: PackedByteArray) -> void:
+	if _anticheat_ref == null:
+		return
+	var local_hash = _anticheat_ref._last_local_hash
+	if local_hash.is_empty():
+		return
+	if not _anticheat_ref.compare_hashes(local_hash, hash_data):
+		push_warning("NetworkManager: State hash mismatch (desync %d)" % _anticheat_ref.desync_count)
+	if _anticheat_ref.is_desynced():
+		desync_detected.emit(RollbackManager.current_frame)
+
+
+@rpc("any_peer", "reliable")
+func _rpc_match_proof(data: PackedByteArray) -> void:
+	var json_str = data.get_string_from_utf8()
+	var json = JSON.new()
+	if json.parse(json_str) == OK and json.data is Dictionary:
+		match_proof_received.emit(json.data)
+
+
+@rpc("any_peer", "reliable")
+func _rpc_match_signature(data: PackedByteArray) -> void:
+	var sig_str = data.get_string_from_utf8()
+	match_signature_received.emit(sig_str)
+
+
 # --- Ping / Connection Quality ---
 
 func send_ping() -> void:
@@ -327,6 +359,17 @@ func send_ping() -> void:
 
 func get_quality() -> ConnectionQuality:
 	return _quality
+
+
+func send_match_proof(proof_data: Dictionary) -> void:
+	if remote_peer_id > 0:
+		var json_bytes = JSON.stringify(proof_data).to_utf8_buffer()
+		_rpc_match_proof.rpc_id(remote_peer_id, json_bytes)
+
+
+func send_match_signature(signature: String) -> void:
+	if remote_peer_id > 0:
+		_rpc_match_signature.rpc_id(remote_peer_id, signature.to_utf8_buffer())
 
 
 # --- Transport Callbacks ---

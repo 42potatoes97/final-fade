@@ -4,16 +4,22 @@ extends Control
 # Tab 1: Direct Connect (host/join via room code, transport selection)
 # Tab 2: Browse Lobbies (discover and join rooms via MQTT broker)
 # Tab 3: Profile (view/edit identity, stats, export/import)
+# Tab 4: Ranked (matchmaking queue, rating display)
+# Tab 5: Leaderboard (sync & view global rankings)
 
 # --- Tab panels ---
 var direct_panel: VBoxContainer
 var lobbies_panel: VBoxContainer
 var profile_panel: VBoxContainer
+var ranked_panel: VBoxContainer
+var leaderboard_panel: VBoxContainer
 
 # --- Tab buttons ---
 var tab_direct_btn: Button
 var tab_lobbies_btn: Button
 var tab_profile_btn: Button
+var tab_ranked_btn: Button
+var tab_leaderboard_btn: Button
 
 # --- Direct Connect widgets ---
 var transport_enet_btn: Button
@@ -42,6 +48,28 @@ var stats_label: Label
 var export_btn: Button
 var import_btn: Button
 
+# --- Ranked widgets ---
+var ranked_rating_label: Label
+var ranked_status_label: Label
+var ranked_find_btn: Button
+var ranked_cancel_btn: Button
+var ranked_region_btn: OptionButton
+var ranked_range_label: Label
+var api_token_field: LineEdit
+var auto_sync_check: CheckButton
+
+# --- Leaderboard widgets ---
+var lb_list_container: VBoxContainer
+var lb_status_label: Label
+var lb_sync_btn: Button
+var lb_refresh_btn: Button
+
+# --- Ranked system references ---
+var _matchmaking: MatchmakingQueue = null
+var _leaderboard_mgr: LeaderboardManager = null
+var _ranked_config: RankedConfig = null
+var _ranked_tick_timer: float = 0.0
+
 
 func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -56,6 +84,10 @@ func _ready() -> void:
 	NetworkManager.auth_failed.connect(_on_auth_failed)
 	NetworkManager.public_ip_fetched.connect(_on_public_ip)
 	NetworkManager.room_code_ready.connect(_on_room_code_ready)
+
+	# Init ranked config
+	_ranked_config = RankedConfig.new()
+	_ranked_config.load_config()
 
 
 # =============================================================================
@@ -100,6 +132,14 @@ func _build_ui() -> void:
 	tab_profile_btn.pressed.connect(func(): _switch_tab("profile"))
 	tab_bar.add_child(tab_profile_btn)
 
+	tab_ranked_btn = _make_tab_button("RANKED")
+	tab_ranked_btn.pressed.connect(func(): _switch_tab("ranked"))
+	tab_bar.add_child(tab_ranked_btn)
+
+	tab_leaderboard_btn = _make_tab_button("BOARD")
+	tab_leaderboard_btn.pressed.connect(func(): _switch_tab("leaderboard"))
+	tab_bar.add_child(tab_leaderboard_btn)
+
 	# Separator line
 	var sep: HSeparator = HSeparator.new()
 	sep.add_theme_constant_override("separation", 8)
@@ -114,6 +154,12 @@ func _build_ui() -> void:
 
 	profile_panel = _build_profile_panel()
 	root_vbox.add_child(profile_panel)
+
+	ranked_panel = _build_ranked_panel()
+	root_vbox.add_child(ranked_panel)
+
+	leaderboard_panel = _build_leaderboard_panel()
+	root_vbox.add_child(leaderboard_panel)
 
 	# Back button
 	var back_btn: Button = Button.new()
@@ -140,6 +186,8 @@ func _switch_tab(tab_name: String) -> void:
 	direct_panel.visible = (tab_name == "direct")
 	lobbies_panel.visible = (tab_name == "lobbies")
 	profile_panel.visible = (tab_name == "profile")
+	ranked_panel.visible = (tab_name == "ranked")
+	leaderboard_panel.visible = (tab_name == "leaderboard")
 
 	# Highlight active tab
 	var gold: Color = Color(1.0, 0.85, 0.2)
@@ -147,10 +195,24 @@ func _switch_tab(tab_name: String) -> void:
 	tab_direct_btn.add_theme_color_override("font_color", gold if tab_name == "direct" else dim)
 	tab_lobbies_btn.add_theme_color_override("font_color", gold if tab_name == "lobbies" else dim)
 	tab_profile_btn.add_theme_color_override("font_color", gold if tab_name == "profile" else dim)
+	tab_ranked_btn.add_theme_color_override("font_color", gold if tab_name == "ranked" else dim)
+	tab_leaderboard_btn.add_theme_color_override("font_color", gold if tab_name == "leaderboard" else dim)
 
 	# Populate profile fields when switching to profile tab
 	if tab_name == "profile":
 		_populate_profile()
+
+	# Populate rating display when switching to ranked tab
+	if tab_name == "ranked":
+		var rating = _get_local_rating()
+		ranked_rating_label.text = "Your Rating: %d" % rating
+
+	# Populate leaderboard from cache when switching to leaderboard tab
+	if tab_name == "leaderboard":
+		if _leaderboard_mgr:
+			var cached = _leaderboard_mgr.get_cached_entries()
+			if cached and cached.size() > 0:
+				_on_leaderboard_updated(cached)
 
 
 # =============================================================================
@@ -633,6 +695,306 @@ func _on_import_pressed() -> void:
 
 
 # =============================================================================
+#  TAB 4 — RANKED
+# =============================================================================
+
+func _build_ranked_panel() -> VBoxContainer:
+	var panel: VBoxContainer = VBoxContainer.new()
+	panel.add_theme_constant_override("separation", 14)
+	panel.alignment = BoxContainer.ALIGNMENT_CENTER
+
+	# Rating display
+	ranked_rating_label = Label.new()
+	ranked_rating_label.text = "Your Rating: %d" % _get_local_rating()
+	ranked_rating_label.add_theme_font_size_override("font_size", 32)
+	ranked_rating_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.2))
+	ranked_rating_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	panel.add_child(ranked_rating_label)
+
+	# Find Match button
+	ranked_find_btn = Button.new()
+	ranked_find_btn.text = "FIND MATCH"
+	ranked_find_btn.custom_minimum_size = Vector2(220, 50)
+	ranked_find_btn.add_theme_font_size_override("font_size", 22)
+	ranked_find_btn.add_theme_color_override("font_color", Color(0.2, 1.0, 0.3))
+	ranked_find_btn.pressed.connect(_on_ranked_find_pressed)
+	panel.add_child(ranked_find_btn)
+
+	# Cancel button (hidden initially)
+	ranked_cancel_btn = Button.new()
+	ranked_cancel_btn.text = "CANCEL"
+	ranked_cancel_btn.custom_minimum_size = Vector2(220, 50)
+	ranked_cancel_btn.add_theme_font_size_override("font_size", 22)
+	ranked_cancel_btn.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2))
+	ranked_cancel_btn.pressed.connect(_on_ranked_cancel_pressed)
+	ranked_cancel_btn.visible = false
+	panel.add_child(ranked_cancel_btn)
+
+	# Region dropdown
+	var region_hbox: HBoxContainer = HBoxContainer.new()
+	region_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	region_hbox.add_theme_constant_override("separation", 10)
+	panel.add_child(region_hbox)
+
+	var region_prompt: Label = Label.new()
+	region_prompt.text = "Region:"
+	region_prompt.add_theme_font_size_override("font_size", 18)
+	region_hbox.add_child(region_prompt)
+
+	ranked_region_btn = OptionButton.new()
+	ranked_region_btn.custom_minimum_size = Vector2(120, 40)
+	ranked_region_btn.add_theme_font_size_override("font_size", 18)
+	ranked_region_btn.add_item("NA")
+	ranked_region_btn.add_item("EU")
+	ranked_region_btn.add_item("AS")
+	ranked_region_btn.add_item("SA")
+	ranked_region_btn.add_item("OC")
+	region_hbox.add_child(ranked_region_btn)
+
+	# Search range display
+	ranked_range_label = Label.new()
+	ranked_range_label.text = "Range: ---"
+	ranked_range_label.add_theme_font_size_override("font_size", 18)
+	ranked_range_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.7))
+	ranked_range_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	panel.add_child(ranked_range_label)
+
+	# Status label
+	ranked_status_label = Label.new()
+	ranked_status_label.text = ""
+	ranked_status_label.add_theme_font_size_override("font_size", 20)
+	ranked_status_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.3))
+	ranked_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	panel.add_child(ranked_status_label)
+
+	# Separator
+	var sep: HSeparator = HSeparator.new()
+	sep.add_theme_constant_override("separation", 8)
+	panel.add_child(sep)
+
+	# API Token section
+	var token_hbox: HBoxContainer = HBoxContainer.new()
+	token_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	token_hbox.add_theme_constant_override("separation", 10)
+	panel.add_child(token_hbox)
+
+	var token_prompt: Label = Label.new()
+	token_prompt.text = "API Token:"
+	token_prompt.add_theme_font_size_override("font_size", 16)
+	token_prompt.add_theme_color_override("font_color", Color(0.5, 0.5, 0.6))
+	token_hbox.add_child(token_prompt)
+
+	api_token_field = LineEdit.new()
+	api_token_field.secret = true
+	api_token_field.placeholder_text = "Enter token..."
+	api_token_field.custom_minimum_size = Vector2(220, 38)
+	api_token_field.add_theme_font_size_override("font_size", 16)
+	token_hbox.add_child(api_token_field)
+
+	var token_save_btn: Button = Button.new()
+	token_save_btn.text = "SAVE"
+	token_save_btn.custom_minimum_size = Vector2(80, 38)
+	token_save_btn.add_theme_font_size_override("font_size", 16)
+	token_save_btn.pressed.connect(_on_api_token_save_pressed)
+	token_hbox.add_child(token_save_btn)
+
+	# Auto-sync CheckButton
+	auto_sync_check = CheckButton.new()
+	auto_sync_check.text = "Auto-sync results after match"
+	auto_sync_check.add_theme_font_size_override("font_size", 16)
+	auto_sync_check.add_theme_color_override("font_color", Color(0.6, 0.6, 0.7))
+	panel.add_child(auto_sync_check)
+
+	return panel
+
+
+# =============================================================================
+#  TAB 5 — LEADERBOARD
+# =============================================================================
+
+func _build_leaderboard_panel() -> VBoxContainer:
+	var panel: VBoxContainer = VBoxContainer.new()
+	panel.add_theme_constant_override("separation", 14)
+	panel.alignment = BoxContainer.ALIGNMENT_CENTER
+
+	# Sync / Refresh bar
+	var top_hbox: HBoxContainer = HBoxContainer.new()
+	top_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	top_hbox.add_theme_constant_override("separation", 12)
+	panel.add_child(top_hbox)
+
+	lb_sync_btn = Button.new()
+	lb_sync_btn.text = "SYNC MY RESULTS"
+	lb_sync_btn.custom_minimum_size = Vector2(200, 44)
+	lb_sync_btn.add_theme_font_size_override("font_size", 18)
+	lb_sync_btn.pressed.connect(_on_lb_sync_pressed)
+	top_hbox.add_child(lb_sync_btn)
+
+	lb_refresh_btn = Button.new()
+	lb_refresh_btn.text = "REFRESH"
+	lb_refresh_btn.custom_minimum_size = Vector2(120, 44)
+	lb_refresh_btn.add_theme_font_size_override("font_size", 18)
+	lb_refresh_btn.pressed.connect(_on_lb_refresh_pressed)
+	top_hbox.add_child(lb_refresh_btn)
+
+	# Status
+	lb_status_label = Label.new()
+	lb_status_label.text = ""
+	lb_status_label.add_theme_font_size_override("font_size", 18)
+	lb_status_label.add_theme_color_override("font_color", Color(0.5, 0.5, 0.6))
+	lb_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	panel.add_child(lb_status_label)
+
+	# Scrollable list
+	var scroll: ScrollContainer = ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(700, 250)
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	panel.add_child(scroll)
+
+	lb_list_container = VBoxContainer.new()
+	lb_list_container.add_theme_constant_override("separation", 6)
+	lb_list_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(lb_list_container)
+
+	# Header row
+	_add_lb_row("#", "Username", "Rating", "W/L", "Matches", true)
+
+	return panel
+
+
+# =============================================================================
+#  RANKED LOGIC
+# =============================================================================
+
+func _on_ranked_find_pressed():
+	if _matchmaking == null:
+		_matchmaking = MatchmakingQueue.new()
+		_matchmaking.init(NetworkManager.get_signaling())
+		_matchmaking.match_found.connect(_on_ranked_match_found)
+		_matchmaking.queue_status_changed.connect(_on_ranked_status_changed)
+
+	var rating = _get_local_rating()
+	var region = ranked_region_btn.get_item_text(ranked_region_btn.selected)
+	_matchmaking.join_queue(rating, region, NetworkManager.active_transport)
+	ranked_find_btn.visible = false
+	ranked_cancel_btn.visible = true
+
+
+func _on_ranked_cancel_pressed():
+	if _matchmaking:
+		_matchmaking.leave_queue()
+	ranked_find_btn.visible = true
+	ranked_cancel_btn.visible = false
+
+
+func _on_ranked_match_found(opponent: Dictionary):
+	ranked_status_label.text = "Match found: " + opponent.get("username", "Unknown")
+	ranked_find_btn.visible = false
+	ranked_cancel_btn.visible = false
+	# Initiate connection — deterministic host selection already done by queue
+	GameManager.online_mode = true
+	GameManager.ranked_mode = true
+	GameManager.ai_mode = false
+	GameManager.training_mode = false
+	# The queue already determined who hosts
+	var code = opponent.get("room_code", "")
+	if code.is_empty():
+		# We are host
+		NetworkManager.host_game()
+		NetworkManager.start_game()
+	else:
+		NetworkManager.join_with_code(code)
+
+
+func _on_ranked_status_changed(status: String):
+	ranked_status_label.text = status.capitalize()
+	if _matchmaking:
+		ranked_range_label.text = "Range: ±%d" % _matchmaking.get_current_range()
+
+
+func _on_api_token_save_pressed():
+	if _ranked_config:
+		_ranked_config.web3_api_token = api_token_field.text
+		_ranked_config.save_config()
+		ranked_status_label.text = "API token saved!"
+
+
+func _get_local_rating() -> int:
+	if _leaderboard_mgr:
+		return _leaderboard_mgr.get_local_rating()
+	return RatingCalculator.DEFAULT_RATING
+
+
+# =============================================================================
+#  LEADERBOARD LOGIC
+# =============================================================================
+
+func _on_lb_sync_pressed():
+	if _leaderboard_mgr == null:
+		_leaderboard_mgr = LeaderboardManager.new()
+		_leaderboard_mgr.init(NetworkManager.get_signaling())
+		_leaderboard_mgr.load_local_data()
+		_leaderboard_mgr.leaderboard_updated.connect(_on_leaderboard_updated)
+
+	if _ranked_config and _ranked_config.has_api_token():
+		_leaderboard_mgr.publish_proof_chain(_ranked_config.web3_api_token, self)
+		lb_status_label.text = "Syncing..."
+	else:
+		lb_status_label.text = "Set API token in RANKED tab first"
+
+
+func _on_lb_refresh_pressed():
+	if _leaderboard_mgr == null:
+		_leaderboard_mgr = LeaderboardManager.new()
+		_leaderboard_mgr.init(NetworkManager.get_signaling())
+		_leaderboard_mgr.load_local_data()
+		_leaderboard_mgr.leaderboard_updated.connect(_on_leaderboard_updated)
+	_leaderboard_mgr.start_listening()
+	_leaderboard_mgr.rebuild_leaderboard(self)
+	lb_status_label.text = "Rebuilding..."
+
+
+func _on_leaderboard_updated(entries: Array):
+	# Clear existing rows
+	for child in lb_list_container.get_children():
+		child.queue_free()
+
+	# Build header
+	_add_lb_row("#", "Username", "Rating", "W/L", "Matches", true)
+
+	for i in range(entries.size()):
+		var e = entries[i]
+		_add_lb_row(
+			str(i + 1),
+			e.get("username", "???"),
+			str(e.get("display_rating", 1000)),
+			"%d/%d" % [e.get("wins", 0), e.get("losses", 0)],
+			str(e.get("total_matches", 0)),
+			false
+		)
+	lb_status_label.text = "%d players" % entries.size()
+
+
+func _add_lb_row(rank, name, rating, wl, matches, is_header: bool):
+	var row = HBoxContainer.new()
+	row.add_theme_constant_override("separation", 16)
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+
+	var color = Color(0.8, 0.8, 0.3) if is_header else Color(0.8, 0.8, 0.9)
+	var font_size = 18 if is_header else 16
+
+	for data in [{"text": rank, "width": 40}, {"text": name, "width": 160}, {"text": rating, "width": 80}, {"text": wl, "width": 80}, {"text": matches, "width": 80}]:
+		var lbl = Label.new()
+		lbl.text = str(data.text)
+		lbl.add_theme_font_size_override("font_size", font_size)
+		lbl.add_theme_color_override("font_color", color)
+		lbl.custom_minimum_size = Vector2(data.width, 0)
+		row.add_child(lbl)
+
+	lb_list_container.add_child(row)
+
+
+# =============================================================================
 #  DIRECT CONNECT — HOST / JOIN LOGIC
 # =============================================================================
 
@@ -764,3 +1126,12 @@ func _on_back_pressed() -> void:
 func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
 		_on_back_pressed()
+
+
+# =============================================================================
+#  PROCESS (matchmaking tick)
+# =============================================================================
+
+func _process(delta):
+	if _matchmaking and _matchmaking.is_in_queue():
+		_matchmaking.tick(delta)

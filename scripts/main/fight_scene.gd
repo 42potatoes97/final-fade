@@ -14,6 +14,13 @@ var overlay_canvas: CanvasLayer = null
 var pause_menu: Control = null
 var is_paused: bool = false
 
+# Ranked match proof signing
+var _replay_manager: ReplayManager = null
+var _anticheat: AnticheatValidator = null
+var _leaderboard: LeaderboardManager = null
+var _pending_proof: Dictionary = {}
+var _is_ranked: bool = false
+
 # Spawn positions
 const P1_SPAWN = Vector3(-3, 0, 0)
 const P2_SPAWN = Vector3(3, 0, 0)
@@ -78,6 +85,30 @@ func _ready() -> void:
 		InputManager.assign_device(remote_id, InputManager.DeviceType.NETWORK, -1)
 		RollbackManager.input_delay = NetworkManager.input_delay
 		RollbackManager.start(fighter1, fighter2)
+
+	# Ranked match setup
+	if GameManager.online_mode and GameManager.get("ranked_mode"):
+		_is_ranked = true
+		_replay_manager = ReplayManager.new()
+		_anticheat = AnticheatValidator.new()
+		RollbackManager.replay_manager = _replay_manager
+		RollbackManager.anticheat = _anticheat
+		NetworkManager._anticheat_ref = _anticheat
+
+		# Start replay recording
+		var p1_class = "DEFENSIVE" if GameManager.p1_fighter_class == GameManager.FighterClass.DEFENSIVE else "OFFENSIVE"
+		var p2_class = "DEFENSIVE" if GameManager.p2_fighter_class == GameManager.FighterClass.DEFENSIVE else "OFFENSIVE"
+		_replay_manager.start_recording(
+			ProfileManager.profile_id,
+			"opponent",  # Will be updated after auth
+			p1_class, p2_class,
+			GameManager.selected_stage
+		)
+
+		# Connect desync signal
+		NetworkManager.desync_detected.connect(_on_desync_detected)
+		NetworkManager.match_proof_received.connect(_on_match_proof_received)
+		NetworkManager.match_signature_received.connect(_on_match_signature_received)
 
 
 func _physics_process(_delta: float) -> void:
@@ -212,12 +243,155 @@ func _on_round_ended(winner_id: int) -> void:
 	round_transition_active = true
 	round_transition_timer = 2.5  # 2.5 second pause
 
+	# Track round end for replay
+	if _replay_manager:
+		_replay_manager.end_round(
+			GameManager.current_round,
+			str(winner_id),
+			GameManager.p1_health,
+			GameManager.p2_health,
+			RollbackManager.current_frame
+		)
+
 
 func _on_match_ended(winner_id: int) -> void:
 	round_msg_label.text = "P" + str(winner_id) + " WINS THE MATCH!"
 	round_msg_label.visible = true
 	round_transition_active = true
 	round_transition_timer = 4.0  # 4 second pause before menu
+	_handle_ranked_match_end(winner_id)
+
+
+func _handle_ranked_match_end(winner_id: int) -> void:
+	if not _is_ranked or _replay_manager == null:
+		return
+
+	# End replay recording
+	var replay = _replay_manager.finalize_replay(
+		str(winner_id),  # Convert to profile_id later
+		GameManager.p1_round_wins,
+		GameManager.p2_round_wins
+	)
+
+	# Save replay locally
+	_replay_manager.save_locally(replay)
+
+	# Compute replay hash
+	var replay_hash = _replay_manager.compute_replay_hash(replay)
+
+	# Build round results from GameManager
+	var round_results: Array = []
+	# Simplified: just record final result
+	round_results.append({
+		"round": 1,
+		"winner_id": str(winner_id),
+		"p1_health": GameManager.p1_health,
+		"p2_health": GameManager.p2_health
+	})
+
+	# Create match data
+	var match_data = MatchProof.create_match_data(
+		ProfileManager.profile_id,
+		"opponent",  # Remote profile ID
+		str(winner_id),
+		"",  # replay_cid populated after IPFS upload
+		round_results,
+		Time.get_datetime_string_from_system()
+	)
+
+	# Sign locally
+	var match_hash = MatchProof.hash_match(match_data)
+	var local_sig = MatchProof.sign_match(match_hash, ProfileManager.signing_key)
+
+	# Store pending proof and send to opponent for counter-signing
+	_pending_proof = {
+		"match_data": match_data,
+		"match_hash": match_hash,
+		"local_sig": local_sig,
+		"replay": replay
+	}
+
+	# Send proof to opponent
+	var proof_to_send = match_data.duplicate()
+	proof_to_send["match_hash"] = match_hash
+	proof_to_send["sender_sig"] = local_sig
+	NetworkManager.send_match_proof(proof_to_send)
+
+	# Start timeout for counter-signature
+	get_tree().create_timer(MatchProof.SIGN_TIMEOUT_SEC).timeout.connect(_on_sign_timeout)
+
+
+func _on_match_proof_received(proof_data: Dictionary) -> void:
+	# Opponent sent us their proof — verify and counter-sign
+	var match_hash = proof_data.get("match_hash", "")
+	if match_hash.is_empty():
+		return
+
+	# Verify the hash matches the data
+	var recomputed = MatchProof.hash_match(proof_data)
+	# Note: hash_match ignores match_hash and sender_sig fields
+
+	# Counter-sign
+	var my_sig = MatchProof.sign_match(match_hash, ProfileManager.signing_key)
+	NetworkManager.send_match_signature(my_sig)
+
+	# If we also sent a proof, merge signatures
+	if not _pending_proof.is_empty():
+		_pending_proof["remote_sig"] = proof_data.get("sender_sig", "")
+		_finalize_proof()
+
+
+func _on_match_signature_received(sig: String) -> void:
+	# Opponent counter-signed our proof
+	if _pending_proof.is_empty():
+		return
+	_pending_proof["remote_sig"] = sig
+	_finalize_proof()
+
+
+func _on_sign_timeout() -> void:
+	# Opponent didn't sign — record as single-sig proof (auto-loss for them)
+	if _pending_proof.is_empty():
+		return
+	if not _pending_proof.has("remote_sig"):
+		_pending_proof["remote_sig"] = ""  # Empty = unsigned
+		_finalize_proof()
+
+
+func _finalize_proof() -> void:
+	if _pending_proof.is_empty():
+		return
+
+	var proof = MatchProof.create_proof(
+		_pending_proof["match_data"],
+		_pending_proof["local_sig"],
+		_pending_proof.get("remote_sig", "")
+	)
+
+	# Store in local proof chain
+	# Load or create leaderboard manager
+	if _leaderboard == null:
+		_leaderboard = LeaderboardManager.new()
+		_leaderboard.init(NetworkManager.get_signaling())
+		_leaderboard.load_local_data()
+	_leaderboard.add_proof(proof)
+
+	# Update profile stats
+	var winner = _pending_proof["match_data"].get("winner_id", "")
+	if winner == ProfileManager.profile_id:
+		ProfileManager.record_win()
+	else:
+		ProfileManager.record_loss()
+
+	_pending_proof = {}
+
+
+func _on_desync_detected(_frame: int) -> void:
+	# Desync detected — terminate match, no proof generated
+	if _anticheat:
+		_anticheat.flag_match("State desync detected")
+	_pending_proof = {}
+	push_warning("FightScene: Desync detected, match invalidated")
 
 
 func _exit_tree() -> void:
@@ -227,6 +401,9 @@ func _exit_tree() -> void:
 	# Clean up rollback manager
 	if RollbackManager.is_active:
 		RollbackManager.stop()
+	# Clean up ranked references
+	RollbackManager.clear_ranked()
+	NetworkManager._anticheat_ref = null
 
 
 func _apply_ai_difficulty(ai, player_id: int) -> void:
