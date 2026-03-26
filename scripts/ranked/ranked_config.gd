@@ -6,9 +6,10 @@ extends RefCounted
 
 const CONFIG_PATH: String = "user://ranked_config.json"
 
-# Shared app token for web3.storage — all players use this
-# Free tier: 5GB, enough for thousands of replay proof chains
-const APP_IPFS_TOKEN: String = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.finalfade-shared-token"
+# Firebase Realtime Database URL (free Spark plan: 1GB storage, 10GB/month)
+# Create project at https://console.firebase.google.com
+# Enable Realtime Database, set rules to allow read/write
+const FIREBASE_DB_URL: String = "https://final-fade-default-rtdb.firebaseio.com"
 
 var region: String = "NA"
 var w3name_key: String = ""  # Base64-encoded 32-byte key for IPNS
@@ -69,8 +70,8 @@ func save_config() -> void:
 	file.close()
 
 
-func get_api_token() -> String:
-	return APP_IPFS_TOKEN
+func get_db_url() -> String:
+	return FIREBASE_DB_URL
 
 
 func get_region() -> String:

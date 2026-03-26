@@ -894,7 +894,7 @@ func _on_lb_sync_pressed():
 		_leaderboard_mgr.load_local_data()
 		_leaderboard_mgr.leaderboard_updated.connect(_on_leaderboard_updated)
 
-	_leaderboard_mgr.publish_proof_chain(RankedConfig.APP_IPFS_TOKEN, self)
+	_leaderboard_mgr.publish_proof_chain("", self)
 	lb_status_label.text = "Syncing..."
 
 

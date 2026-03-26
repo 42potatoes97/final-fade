@@ -389,10 +389,8 @@ func _finalize_proof() -> void:
 	if _replay_manager and _pending_proof.has("replay"):
 		_replay_manager.analyze_in_background(_pending_proof["replay"], ProfileManager.profile_id)
 
-	# Auto-sync proof chain to leaderboard after every match
-	var config: RankedConfig = RankedConfig.new()
-	config.load_config()
-	_leaderboard.publish_proof_chain(config.get_api_token(), self)
+	# Auto-sync proof chain to Firebase leaderboard after every match
+	_leaderboard.publish_proof_chain("", self)
 
 	_pending_proof = {}
 

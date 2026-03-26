@@ -6,8 +6,6 @@ extends RefCounted
 
 const REPLAY_DIR: String = "user://replays/"
 const MAX_LOCAL_REPLAYS: int = 50
-const WEB3_STORAGE_URL: String = "https://api.web3.storage"
-const IPFS_GATEWAY: String = "https://w3s.link"
 
 # Input bit flags (mirror InputManager constants)
 const INPUT_FORWARD: int = 1
