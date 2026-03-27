@@ -17,18 +17,33 @@ const ANNOUNCE_INTERVAL: float = 5.0
 const ENTRY_TIMEOUT: float = 60.0
 const MAX_CANDIDATES: int = 200
 
-# Region proximity — closer regions are preferred
-# Index = priority (lower = closer). Matching region = 0, adjacent = 1, etc.
-const REGION_PROXIMITY: Dictionary = {
-	"NA":  ["NA", "SA", "EUW", "EUE", "AS", "OC"],
-	"SA":  ["SA", "NA", "EUW", "EUE", "OC", "AS"],
-	"EUW": ["EUW", "EUE", "NA", "SA", "AS", "OC"],
-	"EUE": ["EUE", "EUW", "AS", "NA", "SA", "OC"],
-	"AS":  ["AS", "EUE", "OC", "EUW", "NA", "SA"],
-	"OC":  ["OC", "AS", "SA", "EUE", "EUW", "NA"],
+# Region latency matrix (approximate RTT in ms based on real-world data)
+# Sources: Azure network latency, WonderNetwork, CloudPing
+# Regions: USW=US West, USC=US Central, USE=US East, SA=South America,
+#   EUW=EU West, EUE=EU East, AW=Asia West(India/ME), ASEA=SE Asia,
+#   EA=East Asia(JP/KR/CN), OCEW=Oceania West(AU), OCEE=Oceania East(NZ)
+const REGIONS: Array = ["USW", "USC", "USE", "SA", "EUW", "EUE", "AW", "ASEA", "EA", "OCEW", "OCEE"]
+
+# Symmetric latency matrix [from][to] in ms (approximate RTT)
+const LATENCY_MS: Dictionary = {
+	"USW":  {"USW": 0, "USC": 35, "USE": 65, "SA": 120, "EUW": 140, "EUE": 160, "AW": 220, "ASEA": 170, "EA": 110, "OCEW": 160, "OCEE": 180},
+	"USC":  {"USW": 35, "USC": 0, "USE": 30, "SA": 100, "EUW": 110, "EUE": 130, "AW": 200, "ASEA": 190, "EA": 140, "OCEW": 180, "OCEE": 200},
+	"USE":  {"USW": 65, "USC": 30, "USE": 0, "SA": 80, "EUW": 75, "EUE": 95, "AW": 180, "ASEA": 210, "EA": 170, "OCEW": 200, "OCEE": 220},
+	"SA":   {"USW": 120, "USC": 100, "USE": 80, "SA": 0, "EUW": 140, "EUE": 170, "AW": 250, "ASEA": 280, "EA": 260, "OCEW": 220, "OCEE": 240},
+	"EUW":  {"USW": 140, "USC": 110, "USE": 75, "SA": 140, "EUW": 0, "EUE": 30, "AW": 80, "ASEA": 160, "EA": 180, "OCEW": 250, "OCEE": 270},
+	"EUE":  {"USW": 160, "USC": 130, "USE": 95, "SA": 170, "EUE": 0, "EUW": 30, "AW": 60, "ASEA": 130, "EA": 150, "OCEW": 230, "OCEE": 250},
+	"AW":   {"USW": 220, "USC": 200, "USE": 180, "SA": 250, "EUW": 80, "EUE": 60, "AW": 0, "ASEA": 70, "EA": 110, "OCEW": 170, "OCEE": 190},
+	"ASEA": {"USW": 170, "USC": 190, "USE": 210, "SA": 280, "EUW": 160, "EUE": 130, "AW": 70, "ASEA": 0, "EA": 50, "OCEW": 100, "OCEE": 120},
+	"EA":   {"USW": 110, "USC": 140, "USE": 170, "SA": 260, "EUW": 180, "EUE": 150, "AW": 110, "ASEA": 50, "EA": 0, "OCEW": 110, "OCEE": 130},
+	"OCEW": {"USW": 160, "USC": 180, "USE": 200, "SA": 220, "EUW": 250, "EUE": 230, "AW": 170, "ASEA": 100, "EA": 110, "OCEW": 0, "OCEE": 30},
+	"OCEE": {"USW": 180, "USC": 200, "USE": 220, "SA": 240, "EUW": 270, "EUE": 250, "AW": 190, "ASEA": 120, "EA": 130, "OCEW": 30, "OCEE": 0},
 }
-# Max region distance allowed (expands over time: 0=same, 1=adjacent, etc.)
-const REGION_EXPAND_INTERVAL: float = 20.0  # Expand region every 20s
+
+# Max latency thresholds that expand over time (ms)
+const LATENCY_TIER_GOOD: int = 80      # Same region / neighbors
+const LATENCY_TIER_OK: int = 150       # Cross-region playable
+const LATENCY_TIER_ROUGH: int = 220    # Long distance, laggy but possible
+const REGION_EXPAND_INTERVAL: float = 20.0  # Expand latency threshold every 20s
 
 var _signaling: SignalingClient
 var _candidates: Dictionary = {}
@@ -130,12 +145,19 @@ func _evaluate_candidates() -> void:
 	var local_transport: String = _local_entry.get("transport", "")
 	var local_region: String = _local_entry.get("region", "NA")
 
-	# Max allowed region distance (expands over time)
-	var max_region_dist: int = int(_queue_time / REGION_EXPAND_INTERVAL)
+	# Max allowed latency threshold (expands over time)
+	var expand_steps: int = int(_queue_time / REGION_EXPAND_INTERVAL)
+	var max_latency: int = LATENCY_TIER_GOOD  # Start with good connections only
+	if expand_steps >= 1:
+		max_latency = LATENCY_TIER_OK  # After 20s: accept cross-region
+	if expand_steps >= 2:
+		max_latency = LATENCY_TIER_ROUGH  # After 40s: accept long distance
+	if expand_steps >= 3:
+		max_latency = 999  # After 60s: accept anyone
 
-	# Find best candidate: closest region first, then closest rating
+	# Find best candidate: lowest latency first, then closest rating
 	var best_pid: String = ""
-	var best_region_dist: int = 999
+	var best_latency: int = 999
 	var best_rating_diff: int = 999999
 
 	for pid in _candidates:
@@ -154,16 +176,16 @@ func _evaluate_candidates() -> void:
 		if candidate.get("transport", "") != local_transport:
 			continue
 
-		# Region proximity check
-		var region_dist: int = _get_region_distance(local_region, candidate_region)
-		if region_dist > max_region_dist:
+		# Latency check
+		var latency: int = _get_region_latency(local_region, candidate_region)
+		if latency > max_latency:
 			continue
 
-		# Score: prefer closer region, then closer rating
+		# Score: prefer lower latency, then closer rating
 		var rating_diff: int = absi(candidate_rating - local_rating)
-		if region_dist < best_region_dist or (region_dist == best_region_dist and rating_diff < best_rating_diff):
+		if latency < best_latency or (latency == best_latency and rating_diff < best_rating_diff):
 			best_pid = pid
-			best_region_dist = region_dist
+			best_latency = latency
 			best_rating_diff = rating_diff
 
 	if best_pid.is_empty():
@@ -191,12 +213,12 @@ func _evaluate_candidates() -> void:
 	leave_queue()
 
 
-func _get_region_distance(region_a: String, region_b: String) -> int:
+func _get_region_latency(region_a: String, region_b: String) -> int:
+	# Returns estimated RTT in ms between two regions
 	if region_a == region_b:
 		return 0
-	var priority_list: Array = REGION_PROXIMITY.get(region_a, [])
-	var idx: int = priority_list.find(region_b)
-	return idx if idx >= 0 else 99
+	var row: Dictionary = LATENCY_MS.get(region_a, {})
+	return row.get(region_b, 999)
 
 
 func _initiate_match_connection(opponent: Dictionary) -> void:
