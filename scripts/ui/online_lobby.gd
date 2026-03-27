@@ -18,6 +18,7 @@ var _lobby_browsing: bool = false
 var profile_panel: VBoxContainer
 var direct_panel: VBoxContainer
 var lobbies_panel: VBoxContainer
+var quick_panel: VBoxContainer
 var ranked_panel: VBoxContainer
 var leaderboard_panel: VBoxContainer
 
@@ -25,6 +26,7 @@ var leaderboard_panel: VBoxContainer
 var tab_profile_btn: Button
 var tab_direct_btn: Button
 var tab_lobbies_btn: Button
+var tab_quick_btn: Button
 var tab_ranked_btn: Button
 var tab_leaderboard_btn: Button
 
@@ -147,6 +149,10 @@ func _build_ui() -> void:
 	tab_lobbies_btn.pressed.connect(func(): _try_switch_tab("lobbies"))
 	tab_bar.add_child(tab_lobbies_btn)
 
+	tab_quick_btn = _make_tab_button("QUICK")
+	tab_quick_btn.pressed.connect(func(): _try_switch_tab("quick"))
+	tab_bar.add_child(tab_quick_btn)
+
 	tab_ranked_btn = _make_tab_button("RANKED")
 	tab_ranked_btn.pressed.connect(func(): _try_switch_tab("ranked"))
 	tab_bar.add_child(tab_ranked_btn)
@@ -168,6 +174,9 @@ func _build_ui() -> void:
 
 	lobbies_panel = _build_lobbies_panel()
 	root_vbox.add_child(lobbies_panel)
+
+	quick_panel = _build_quick_panel()
+	root_vbox.add_child(quick_panel)
 
 	ranked_panel = _build_ranked_panel()
 	root_vbox.add_child(ranked_panel)
@@ -208,6 +217,7 @@ func _switch_tab(tab_name: String) -> void:
 	profile_panel.visible = (tab_name == "profile")
 	direct_panel.visible = (tab_name == "direct")
 	lobbies_panel.visible = (tab_name == "lobbies")
+	quick_panel.visible = (tab_name == "quick")
 	ranked_panel.visible = (tab_name == "ranked")
 	leaderboard_panel.visible = (tab_name == "leaderboard")
 
@@ -218,6 +228,7 @@ func _switch_tab(tab_name: String) -> void:
 	tab_profile_btn.add_theme_color_override("font_color", gold if tab_name == "profile" else dim)
 	tab_direct_btn.add_theme_color_override("font_color", gold if tab_name == "direct" else (dim if _profile_set else locked))
 	tab_lobbies_btn.add_theme_color_override("font_color", gold if tab_name == "lobbies" else (dim if _profile_set else locked))
+	tab_quick_btn.add_theme_color_override("font_color", gold if tab_name == "quick" else (dim if _profile_set else locked))
 	tab_ranked_btn.add_theme_color_override("font_color", gold if tab_name == "ranked" else (dim if _profile_set else locked))
 	tab_leaderboard_btn.add_theme_color_override("font_color", gold if tab_name == "leaderboard" else (dim if _profile_set else locked))
 
@@ -236,6 +247,7 @@ func _update_tab_availability() -> void:
 	var dim: Color = Color(0.6, 0.6, 0.7)
 	tab_direct_btn.add_theme_color_override("font_color", dim if _profile_set else locked)
 	tab_lobbies_btn.add_theme_color_override("font_color", dim if _profile_set else locked)
+	tab_quick_btn.add_theme_color_override("font_color", dim if _profile_set else locked)
 	tab_ranked_btn.add_theme_color_override("font_color", dim if _profile_set else locked)
 	tab_leaderboard_btn.add_theme_color_override("font_color", dim if _profile_set else locked)
 
@@ -830,6 +842,146 @@ func _update_lobby_status() -> void:
 
 # =============================================================================
 #  TAB 4 — RANKED
+# =============================================================================
+
+# =============================================================================
+#  TAB — QUICK MATCH
+# =============================================================================
+
+var quick_region_btn: OptionButton
+var quick_find_btn: Button
+var quick_cancel_btn: Button
+var quick_status_label: Label
+
+
+func _build_quick_panel() -> VBoxContainer:
+	var panel: VBoxContainer = VBoxContainer.new()
+	panel.add_theme_constant_override("separation", 14)
+	panel.alignment = BoxContainer.ALIGNMENT_CENTER
+
+	var title_lbl: Label = Label.new()
+	title_lbl.text = "QUICK MATCH"
+	title_lbl.add_theme_font_size_override("font_size", 28)
+	title_lbl.add_theme_color_override("font_color", Color(0.3, 0.8, 1.0))
+	title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	panel.add_child(title_lbl)
+
+	var desc_lbl: Label = Label.new()
+	desc_lbl.text = "Find an opponent fast — no rating, just play"
+	desc_lbl.add_theme_font_size_override("font_size", 16)
+	desc_lbl.add_theme_color_override("font_color", Color(0.5, 0.5, 0.6))
+	desc_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	panel.add_child(desc_lbl)
+
+	# Region selector
+	var region_hbox: HBoxContainer = HBoxContainer.new()
+	region_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	region_hbox.add_theme_constant_override("separation", 10)
+	panel.add_child(region_hbox)
+
+	var region_lbl: Label = Label.new()
+	region_lbl.text = "Region:"
+	region_lbl.add_theme_font_size_override("font_size", 18)
+	region_hbox.add_child(region_lbl)
+
+	quick_region_btn = OptionButton.new()
+	quick_region_btn.custom_minimum_size = Vector2(120, 40)
+	quick_region_btn.add_theme_font_size_override("font_size", 18)
+	for r in MatchmakingQueue.REGIONS:
+		quick_region_btn.add_item(r)
+	region_hbox.add_child(quick_region_btn)
+
+	# Find / Cancel buttons
+	var btn_hbox: HBoxContainer = HBoxContainer.new()
+	btn_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	btn_hbox.add_theme_constant_override("separation", 20)
+	panel.add_child(btn_hbox)
+
+	quick_find_btn = Button.new()
+	quick_find_btn.text = "FIND MATCH"
+	quick_find_btn.custom_minimum_size = Vector2(220, 55)
+	quick_find_btn.add_theme_font_size_override("font_size", 24)
+	quick_find_btn.add_theme_color_override("font_color", Color(0.3, 0.8, 1.0))
+	quick_find_btn.pressed.connect(_on_quick_find_pressed)
+	btn_hbox.add_child(quick_find_btn)
+
+	quick_cancel_btn = Button.new()
+	quick_cancel_btn.text = "CANCEL"
+	quick_cancel_btn.custom_minimum_size = Vector2(150, 55)
+	quick_cancel_btn.add_theme_font_size_override("font_size", 22)
+	quick_cancel_btn.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2))
+	quick_cancel_btn.pressed.connect(_on_quick_cancel_pressed)
+	quick_cancel_btn.visible = false
+	btn_hbox.add_child(quick_cancel_btn)
+
+	# Status
+	quick_status_label = Label.new()
+	quick_status_label.text = ""
+	quick_status_label.add_theme_font_size_override("font_size", 20)
+	quick_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	panel.add_child(quick_status_label)
+
+	return panel
+
+
+func _on_quick_find_pressed():
+	var signaling: SignalingClient = NetworkManager.get_signaling()
+	if not signaling.is_connected_to_broker():
+		signaling.connect_to_broker()
+
+	if _matchmaking == null:
+		_matchmaking = MatchmakingQueue.new()
+		_matchmaking.init(signaling)
+		_matchmaking.match_found.connect(_on_quick_match_found)
+		_matchmaking.queue_status_changed.connect(_on_quick_status_changed)
+
+	var region: String = quick_region_btn.get_item_text(quick_region_btn.selected)
+	_matchmaking.join_quick_match(region, "webrtc")
+	quick_find_btn.visible = false
+	quick_cancel_btn.visible = true
+	quick_status_label.text = "Searching..."
+	quick_status_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.3))
+
+
+func _on_quick_cancel_pressed():
+	if _matchmaking:
+		_matchmaking.leave_queue()
+	quick_find_btn.visible = true
+	quick_cancel_btn.visible = false
+	quick_status_label.text = ""
+
+
+func _on_quick_status_changed(status: String):
+	quick_status_label.text = status
+
+
+func _on_quick_match_found(opponent: Dictionary):
+	var opp_name: String = opponent.get("username", "Unknown")
+	quick_find_btn.visible = false
+	quick_cancel_btn.visible = false
+	quick_status_label.text = "Match found: %s — Connecting..." % opp_name
+	quick_status_label.add_theme_color_override("font_color", Color(0.2, 1.0, 0.3))
+
+	GameManager.online_mode = true
+	GameManager.ranked_mode = false
+	GameManager.ai_mode = false
+	GameManager.training_mode = false
+
+	if not NetworkManager.connected_to_peer.is_connected(_on_quick_connected):
+		NetworkManager.connected_to_peer.connect(_on_quick_connected, CONNECT_ONE_SHOT)
+
+
+func _on_quick_connected():
+	quick_status_label.text = "Connected! Starting match..."
+	get_tree().create_timer(1.0).timeout.connect(func():
+		NetworkManager.start_game()
+		NetworkManager.notify_game_start()
+		get_tree().change_scene_to_file("res://scenes/ui/side_select.tscn")
+	)
+
+
+# =============================================================================
+#  TAB — RANKED
 # =============================================================================
 
 func _build_ranked_panel() -> VBoxContainer:

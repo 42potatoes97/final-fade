@@ -8,8 +8,9 @@ extends RefCounted
 signal match_found(opponent: Dictionary)
 signal queue_status_changed(status: String)
 
-const QUEUE_TOPIC: String = "finalfade/ranked/queue"
-const MATCH_TOPIC_PREFIX: String = "finalfade/ranked/match/"
+const RANKED_QUEUE_TOPIC: String = "finalfade/ranked/queue"
+const QUICK_QUEUE_TOPIC: String = "finalfade/quick/queue"
+const MATCH_TOPIC_PREFIX: String = "finalfade/match/"
 const RATING_RANGE_INITIAL: int = 100
 const RATING_RANGE_EXPANSION: float = 50.0
 const RATING_RANGE_MAX: int = 500
@@ -48,10 +49,12 @@ const REGION_EXPAND_INTERVAL: float = 20.0  # Expand latency threshold every 20s
 var _signaling: SignalingClient
 var _candidates: Dictionary = {}
 var _in_queue: bool = false
+var _is_quick_match: bool = false  # true = quick match (no rating), false = ranked
 var _queue_time: float = 0.0
 var _announce_timer: float = 0.0
 var _local_entry: Dictionary = {}
 var _current_range: int = RATING_RANGE_INITIAL
+var _active_topic: String = ""
 
 
 func init(signaling: SignalingClient) -> void:
@@ -59,7 +62,18 @@ func init(signaling: SignalingClient) -> void:
 	_signaling.message_received.connect(_on_queue_message)
 
 
+func join_quick_match(region: String, transport: String) -> void:
+	# Quick match — no rating check, just region + latency matching
+	_is_quick_match = true
+	_join_internal(0, region, transport, QUICK_QUEUE_TOPIC)
+
+
 func join_queue(rating: int, region: String, transport: String) -> void:
+	_is_quick_match = false
+	_join_internal(rating, region, transport, RANKED_QUEUE_TOPIC)
+
+
+func _join_internal(rating: int, region: String, transport: String, topic: String) -> void:
 	var pm = Engine.get_main_loop().root.get_node_or_null("ProfileManager")
 	var pid: String = pm.profile_id if pm else ""
 	var uname: String = pm.username if pm else ""
@@ -80,8 +94,9 @@ func join_queue(rating: int, region: String, transport: String) -> void:
 		var sig: PackedByteArray = CryptoUtils.hmac_sha256(signing_key, canonical.to_utf8_buffer())
 		_local_entry["signature"] = Marshalls.raw_to_base64(sig)
 
-	_signaling.subscribe(QUEUE_TOPIC)
-	_signaling.publish(QUEUE_TOPIC, JSON.stringify(_local_entry))
+	_active_topic = topic
+	_signaling.subscribe(_active_topic)
+	_signaling.publish(_active_topic, JSON.stringify(_local_entry))
 
 	_in_queue = true
 	_queue_time = 0.0
@@ -99,7 +114,7 @@ func leave_queue() -> void:
 		"profile_id": _local_entry.get("profile_id", ""),
 		"status": "leaving",
 	}
-	_signaling.publish(QUEUE_TOPIC, JSON.stringify(removal))
+	_signaling.publish(_active_topic, JSON.stringify(removal))
 
 	_candidates.clear()
 	_in_queue = false
@@ -127,7 +142,7 @@ func tick(delta: float) -> void:
 			var canonical: String = MatchProof._sorted_json(entry_no_sig)
 			var sig: PackedByteArray = CryptoUtils.hmac_sha256(signing_key, canonical.to_utf8_buffer())
 			_local_entry["signature"] = Marshalls.raw_to_base64(sig)
-		_signaling.publish(QUEUE_TOPIC, JSON.stringify(_local_entry))
+		_signaling.publish(_active_topic, JSON.stringify(_local_entry))
 
 	# Expand rating range over time: +EXPANSION every 15 seconds
 	_current_range = mini(
@@ -168,8 +183,8 @@ func _evaluate_candidates() -> void:
 		var candidate_rating: int = int(candidate.get("rating", 0))
 		var candidate_region: String = candidate.get("region", "")
 
-		# Rating must be within current expanding range
-		if absi(candidate_rating - local_rating) > _current_range:
+		# Rating must be within current expanding range (skip for quick match)
+		if not _is_quick_match and absi(candidate_rating - local_rating) > _current_range:
 			continue
 
 		# Transport must match
@@ -275,7 +290,7 @@ func _cleanup_stale() -> void:
 
 
 func _on_queue_message(topic: String, payload: String) -> void:
-	if topic != QUEUE_TOPIC:
+	if topic != _active_topic:
 		return
 
 	var parsed = JSON.parse_string(payload)
