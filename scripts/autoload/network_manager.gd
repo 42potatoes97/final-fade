@@ -37,7 +37,7 @@ var _auth_nonce: PackedByteArray = PackedByteArray()
 var _auth_timer: float = 0.0
 var _pending_webrtc_code: String = ""
 var _connect_timer: float = 0.0
-const CONNECT_TIMEOUT_SEC: float = 15.0
+const CONNECT_TIMEOUT_SEC: float = 30.0  # Give ICE negotiation time to complete
 var _auth_pending: bool = false
 
 # Transport instances
@@ -60,6 +60,12 @@ func _ready() -> void:
 	_enet_transport.peer_disconnected.connect(_on_transport_peer_disconnected)
 	_enet_transport.connection_established.connect(_on_transport_connected)
 	_enet_transport.connection_failed.connect(_on_transport_failed)
+
+	# Listen for Godot's built-in multiplayer peer signals (works for both ENet and WebRTC)
+	multiplayer.peer_connected.connect(_on_multiplayer_peer_connected)
+	multiplayer.peer_disconnected.connect(_on_multiplayer_peer_disconnected)
+	multiplayer.connected_to_server.connect(_on_multiplayer_connected_to_server)
+	multiplayer.connection_failed.connect(_on_multiplayer_connection_failed)
 
 
 func get_signaling() -> SignalingClient:
@@ -425,7 +431,32 @@ func send_match_signature(signature: String) -> void:
 
 # --- Transport Callbacks ---
 
+# --- Godot SceneMultiplayer signals (primary for WebRTC) ---
+
+func _on_multiplayer_peer_connected(id: int) -> void:
+	print("[NetworkManager] Multiplayer peer connected! id=%d" % id)
+	_on_transport_peer_connected(id)
+
+
+func _on_multiplayer_peer_disconnected(id: int) -> void:
+	print("[NetworkManager] Multiplayer peer disconnected! id=%d" % id)
+	disconnected.emit()
+
+
+func _on_multiplayer_connected_to_server() -> void:
+	print("[NetworkManager] Connected to server (as client)!")
+	_on_transport_connected()
+
+
+func _on_multiplayer_connection_failed() -> void:
+	print("[NetworkManager] Multiplayer connection failed!")
+	connection_failed.emit()
+
+
+# --- Transport-level signals (backup, used by ENet transport) ---
+
 func _on_transport_peer_connected(id: int) -> void:
+	print("[NetworkManager] Peer connected! id=%d" % id)
 	remote_peer_id = id
 	if _session_key.size() > 0:
 		# Auth handshake
@@ -447,6 +478,7 @@ func _on_transport_peer_disconnected(_id: int) -> void:
 
 
 func _on_transport_connected() -> void:
+	print("[NetworkManager] Transport connected! is_host=%s" % str(is_host))
 	# Client connected to server
 	if not is_host:
 		remote_peer_id = 1
@@ -455,6 +487,7 @@ func _on_transport_connected() -> void:
 			_start_auth_as_joiner()
 		else:
 			connection_state = ConnectionState.CONNECTED
+			print("[NetworkManager] P2P connection established!")
 			connected_to_peer.emit()
 
 
@@ -482,8 +515,8 @@ func _init_webrtc_transport() -> void:
 # --- Packet Processing ---
 
 func _process(delta: float) -> void:
-	# Connection timeout — only for JOINING (host waits indefinitely for opponent)
-	if connection_state == ConnectionState.JOINING:
+	# Connection timeout — only for ENet JOINING (WebRTC needs more time for ICE)
+	if connection_state == ConnectionState.JOINING and active_transport == "enet":
 		_connect_timer += delta
 		if _connect_timer >= CONNECT_TIMEOUT_SEC:
 			_connect_timer = 0.0
@@ -510,8 +543,7 @@ func _process(delta: float) -> void:
 
 	_poll_packets()
 
-	# Periodic ping
-	_quality._ping_timer = _quality.get("_ping_timer") if "_ping_timer" in _quality else 0.0
+	# Periodic ping (handled by RollbackManager during gameplay)
 
 
 func _poll_packets() -> void:

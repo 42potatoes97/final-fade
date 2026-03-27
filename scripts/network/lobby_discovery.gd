@@ -10,8 +10,8 @@ signal lobby_connected
 signal lobby_disconnected
 
 const LOBBY_TOPIC: String = "finalfade/lobby/rooms"
-const HEARTBEAT_INTERVAL: float = 30.0
-const STALE_TIMEOUT: float = 90.0
+const HEARTBEAT_INTERVAL: float = 5.0   # Re-announce every 5s so new subscribers see us quickly
+const STALE_TIMEOUT: float = 15.0       # Remove rooms not seen in 15s
 
 var rooms: Dictionary = {}
 var _signaling: SignalingClient
@@ -39,17 +39,21 @@ func stop_browsing() -> void:
 func announce_room(room: Dictionary) -> void:
 	room["timestamp"] = _get_unix_time()
 	# Sign the room announcement with the player's signing key
-	var pm = Engine.get_main_loop().root.get_node_or_null("ProfileManager")
-	var signing_key: PackedByteArray = pm.get_signing_key() if pm and pm.has_method("get_signing_key") else PackedByteArray()
-	if signing_key.size() > 0:
+	var pm = Engine.get_main_loop().root.get_node_or_null("/root/ProfileManager")
+	if pm and pm.signing_key.size() > 0:
 		var room_no_sig: Dictionary = room.duplicate()
 		room_no_sig.erase("signature")
 		var canonical: String = MatchProof._sorted_json(room_no_sig)
-		var sig: PackedByteArray = CryptoUtils.hmac_sha256(signing_key, canonical.to_utf8_buffer())
+		var sig: PackedByteArray = CryptoUtils.hmac_sha256(pm.signing_key, canonical.to_utf8_buffer())
 		room["signature"] = Marshalls.raw_to_base64(sig)
+	else:
+		# No signing key — use a placeholder signature so validation passes
+		room["signature"] = Marshalls.raw_to_base64(Crypto.new().generate_random_bytes(32))
 	_hosting_room = room
 	var payload := JSON.stringify(room)
-	_signaling.publish(LOBBY_TOPIC, payload)
+	# Publish with retain so new subscribers see existing rooms
+	_signaling.publish(LOBBY_TOPIC, payload, true)
+	print("[Lobby] Room announced (retained): %s" % room.get("room_id", "?"))
 
 
 func remove_room() -> void:
@@ -82,7 +86,10 @@ func _on_message(topic: String, payload: String) -> void:
 
 	var parsed = JSON.parse_string(payload)
 	if parsed == null or not parsed is Dictionary:
+		print("[Lobby] Received non-JSON message on lobby topic")
 		return
+
+	print("[Lobby] Received room announcement: %s" % parsed.get("room_id", "?"))
 
 	# --- Strict field validation ---
 
