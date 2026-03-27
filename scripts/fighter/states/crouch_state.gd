@@ -6,19 +6,22 @@ extends FighterState
 # While crouching: high attacks whiff, can crouch block with back held
 
 const CROUCH_TRANSITION_FRAMES: int = 4  # Frames to reach full crouch
+const DF_ENTRY_SPEED: float = 2.0  # Subtle forward creep during df crouch entry
 
 var frame_counter: int = 0
 var fully_crouched: bool = false
 var from_backdash: bool = false  # Track if we entered from backdash (for KBD)
+var from_df: bool = false        # Entered via df (forward+down) — use smooth entry
 
 
 func save_state() -> Dictionary:
-	return {"fc": frame_counter, "full": fully_crouched, "fbd": from_backdash}
+	return {"fc": frame_counter, "full": fully_crouched, "fbd": from_backdash, "fdf": from_df}
 
 func load_state(s: Dictionary) -> void:
 	frame_counter = s.get("fc", 0)
 	fully_crouched = s.get("full", false)
 	from_backdash = s.get("fbd", false)
+	from_df = s.get("fdf", false)
 
 
 func enter(prev_state: String) -> void:
@@ -27,9 +30,15 @@ func enter(prev_state: String) -> void:
 	fighter.velocity = Vector3.ZERO
 	fighter.is_crouching = true
 	from_backdash = (prev_state == "Backdash")
+	# Detect df entry (forward is held alongside down)
+	var input_bits = InputManager.get_input(fighter.player_id)
+	from_df = InputManager.has_flag(input_bits, InputManager.INPUT_FORWARD)
 	var m = get_model()
 	if m:
-		m.set_pose_crouch()
+		if from_df:
+			m.set_pose_crouch_enter()  # Slow blend — visible lean-in
+		else:
+			m.set_pose_crouch()        # Fast snap (d/db entry, intentional)
 
 
 func exit() -> void:
@@ -70,7 +79,11 @@ func handle_input(input_bits: int) -> String:
 		return "WalkForward"
 	# df while crouching = stay crouching (vulnerable, for df+moves)
 	if IM.has_flag(input_bits, IM.INPUT_FORWARD) and holding_down:
-		return ""  # Stay in crouch
+		# Check for df+attack first (e.g. df+1 from crouch)
+		var df_attack = try_attack(input_bits)
+		if df_attack != "":
+			return df_attack
+		return ""  # No attack — stay in crouch
 	# Only actual crouch dash motion triggers wavedash
 	if buf.detect_crouch_dash_input():
 		return "CrouchDash"
@@ -97,7 +110,17 @@ func tick(_delta: float) -> String:
 	frame_counter += 1
 	if frame_counter >= CROUCH_TRANSITION_FRAMES:
 		fully_crouched = true
+		# Finish the entry: commit to full crouch pose (snaps blend_speed back to 45)
+		if from_df and frame_counter == CROUCH_TRANSITION_FRAMES:
+			var m = get_model()
+			if m:
+				m.set_pose_crouch()
 
-	fighter.velocity = Vector3.ZERO
+	# During df entry: slide forward slightly (the Tekken "natural crouch" lean)
+	if from_df and not fully_crouched:
+		var fwd = fighter.get_forward_direction()
+		fighter.velocity = fwd * DF_ENTRY_SPEED
+	else:
+		fighter.velocity = Vector3.ZERO
 	fighter.move_and_slide()
 	return ""

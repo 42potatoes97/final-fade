@@ -60,10 +60,13 @@ var _cached_opponent_limbs: Dictionary = {}  # Defender body part joints
 
 # Joint path mapping for attacker limbs
 var limb_paths: Dictionary = {
-	"hand_l": "Root/Abdomen/Torso/ShoulderL/UpperArmL/ForearmL/HandL",
-	"hand_r": "Root/Abdomen/Torso/ShoulderR/UpperArmR/ForearmR/HandR",
-	"foot_l": "Root/HipL/UpperLegL/LowerLegL/FootL",
-	"foot_r": "Root/HipR/UpperLegR/LowerLegR/FootR",
+	"hand_l":   "Root/Abdomen/Torso/ShoulderL/UpperArmL/ForearmL/HandL",
+	"hand_r":   "Root/Abdomen/Torso/ShoulderR/UpperArmR/ForearmR/HandR",
+	"forearm_r": "Root/Abdomen/Torso/ShoulderR/UpperArmR/ForearmR",
+	"foot_l":   "Root/HipL/UpperLegL/LowerLegL/FootL",
+	"foot_r":   "Root/HipR/UpperLegR/LowerLegR/FootR",
+	"shin_l":   "Root/HipL/UpperLegL/LowerLegL",
+	"shin_r":   "Root/HipR/UpperLegR/LowerLegR",
 }
 
 
@@ -309,6 +312,11 @@ func _check_wall_bonus(defender: CharacterBody3D) -> int:
 
 
 func _check_blocked(opponent: CharacterBody3D, hit_level: String) -> bool:
+	# Misaligned opponents can't block — they're facing the wrong way after being sidestepped
+	# Must realign (press a direction or attack) before guard becomes active again
+	if opponent.is_misaligned:
+		return false
+
 	var input = InputManager.get_input(opponent.player_id)
 	var holding_back = (input & InputManager.INPUT_BACK) != 0
 	var holding_down = (input & InputManager.INPUT_DOWN) != 0

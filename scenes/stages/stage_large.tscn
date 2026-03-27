@@ -1,0 +1,16 @@
+[gd_scene load_steps=2 format=3 uid="uid://bstagelarge"]
+
+[ext_resource type="Script" path="res://scripts/stages/octagon_stage.gd" id="1"]
+
+[node name="StageLarge" type="Node3D"]
+script = ExtResource("1")
+apothem = 18.0
+wall_height = 3.0
+wall_thickness = 0.4
+floor_color = Color(0.18, 0.22, 0.28, 1)
+wall_color = Color(0.2, 0.3, 0.45, 1)
+bg_color = Color(0.1, 0.12, 0.18, 1)
+ambient_color = Color(0.35, 0.4, 0.55, 1)
+light_color = Color(0.8, 0.9, 1.0, 1)
+light_energy = 1.1
+infinite_floor = false

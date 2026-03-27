@@ -27,7 +27,9 @@ var _cached_camera: Camera3D = null
 var backdash_cooldown: int = 0  # Frames before another raw dash (f,f or b,b) is allowed
 const BACKDASH_COOLDOWN_FRAMES: int = 12  # Must KBD or wavedash — no raw backdash spam
 var misalign_timer: int = 0  # Frames since misaligned (for training mode auto-realign)
+var realign_frames: int = 0  # Frames since defender started turning (0 = not started yet)
 const REALIGN_TURN_SPEED: float = 8.0  # How fast we turn when realigning (radians/sec)
+const REALIGN_GUARD_FRAMES: int = 3  # Frames of active turning before guard restores
 
 const MIN_DISTANCE: float = 1.0
 const GRAVITY: float = 20.0  # Stronger gravity to keep grounded
@@ -68,8 +70,8 @@ func _register_moves() -> void:
 	jab.recovery_frames = 8
 	jab.damage = 8
 	jab.hit_level = "high"
-	jab.hitstun_frames = 16
-	jab.blockstun_frames = 11
+	jab.hitstun_frames = 12
+	jab.blockstun_frames = 7
 	jab.hitstop_frames = 4        # Jab/poke hitstop
 	jab.knockback = 0.4
 	jab.pushback_block = 0.5
@@ -80,14 +82,15 @@ func _register_moves() -> void:
 		jab.string_window_frames = 10
 	move_registry.register_move("1", jab)
 
-	# 2: Overhead Slam — i20 MID, high crush, wall splat, knockdown
-	# On block: blockstun=4, recovery=20 -> -16 on block (very punishable)
+	# 2: Overhead Slam — i16 MID, high crush, wall splat, knockdown
+	# On block: blockstun=4, recovery=20 -> -16 on block (launch punishable)
+	# Low pushback on block so defender stays point-blank for free punish
 	var hcb = MoveScript.new()
 	hcb.move_name = "Overhead Slam"
 	hcb.input_command = "2"
 	hcb.startup_frames = 16
 	hcb.active_frames = 4
-	hcb.recovery_frames = 16
+	hcb.recovery_frames = 20
 	hcb.damage = 35
 	hcb.hit_level = "mid"
 	hcb.high_crush = true
@@ -95,15 +98,14 @@ func _register_moves() -> void:
 	hcb.blockstun_frames = 4
 	hcb.hitstop_frames = 8       # KD move hitstop
 	hcb.knockback = 2.5
-	hcb.pushback_block = 2.0
+	hcb.pushback_block = 0.3     # Near-zero pushback — punishable means punishable
 	hcb.wall_splat = true
 	hcb.causes_knockdown = true
 	hcb.forward_lunge = 0.10  # Forward rush for whiff punish range (tracks better vs backdash)
 	hcb.pose_name = "high_crush"
 	move_registry.register_move("2", hcb)
 
-	# 3: Low Kick — i12 LOW, +4 on hit (hitstun=16 - recovery=17 -> actually -1? No: on_hit = hitstun - recovery)
-	# Per table: hitstun=16, blockstun=4, recovery=17
+	# 3: Low Kick — i12 LOW, +2 on hit (hitstun=12 - recovery=10), -6 on block
 	var lk = MoveScript.new()
 	lk.move_name = "Low Kick"
 	lk.input_command = "3"
@@ -112,7 +114,7 @@ func _register_moves() -> void:
 	lk.recovery_frames = 10
 	lk.damage = 12
 	lk.hit_level = "low"
-	lk.hitstun_frames = 16
+	lk.hitstun_frames = 12
 	lk.blockstun_frames = 4
 	lk.hitstop_frames = 4        # Poke hitstop
 	lk.knockback = 1.0
@@ -138,7 +140,7 @@ func _register_moves() -> void:
 	hk.pose_name = "high_kick"
 	if is_offensive:
 		# In string context: first hit staggers (no KD), second hit KDs
-		hk.hitstun_frames = 22       # Long stagger hitstun — guarantees second hit
+		hk.hitstun_frames = 18       # Long stagger hitstun — guarantees second hit
 		hk.blockstun_frames = 4      # -14 on block — punishable, opponent can duck 2nd
 		hk.hitstop_frames = 6
 		hk.causes_knockdown = false   # Stagger, not KD
@@ -196,8 +198,8 @@ func _register_defensive_exclusive(MoveScript) -> void:
 	jab2.recovery_frames = 9
 	jab2.damage = 8
 	jab2.hit_level = "high"
-	jab2.hitstun_frames = 16
-	jab2.blockstun_frames = 13
+	jab2.hitstun_frames = 12
+	jab2.blockstun_frames = 8
 	jab2.hitstop_frames = 4      # Jab hitstop
 	jab2.knockback = 0.2
 	jab2.pushback_block = 0.4
@@ -236,8 +238,8 @@ func _register_defensive_exclusive(MoveScript) -> void:
 	df1.damage = 12
 	df1.hit_level = "mid"
 	df1.is_homing = false
-	df1.hitstun_frames = 18
-	df1.blockstun_frames = 13
+	df1.hitstun_frames = 14
+	df1.blockstun_frames = 11
 	df1.hitstop_frames = 6       # Mid-tier hitstop
 	df1.knockback = 1.0
 	df1.pushback_block = 0.6
@@ -255,8 +257,8 @@ func _register_defensive_exclusive(MoveScript) -> void:
 	dmp.damage = 12
 	dmp.hit_level = "mid"
 	dmp.is_homing = true
-	dmp.hitstun_frames = 18
-	dmp.blockstun_frames = 12
+	dmp.hitstun_frames = 14
+	dmp.blockstun_frames = 9
 	dmp.hitstop_frames = 6       # Mid-tier hitstop
 	dmp.knockback = 1.2
 	dmp.pushback_block = 0.4
@@ -297,7 +299,7 @@ func _register_offensive_exclusive(MoveScript) -> void:
 	d4.recovery_frames = 11
 	d4.damage = 12
 	d4.hit_level = "low"
-	d4.hitstun_frames = 18
+	d4.hitstun_frames = 13
 	d4.blockstun_frames = 5
 	d4.hitstop_frames = 4        # Poke hitstop
 	d4.knockback = 0.8
@@ -359,6 +361,7 @@ func save_state() -> Dictionary:
 		"invuln": is_invulnerable,
 		"misalign": is_misaligned,
 		"misalign_t": misalign_timer,
+		"realign_f": realign_frames,
 		"hitstop": hitstop_remaining,
 		"pend_kb": [pending_knockback.x, pending_knockback.y, pending_knockback.z],
 		"bd_cd": backdash_cooldown,
@@ -380,6 +383,7 @@ func load_state(s: Dictionary) -> void:
 	is_invulnerable = s.get("invuln", false)
 	is_misaligned = s.get("misalign", false)
 	misalign_timer = s.get("misalign_t", 0)
+	realign_frames = s.get("realign_f", 0)
 	hitstop_remaining = s.get("hitstop", 0)
 	var kb = s.get("pend_kb", [0, 0, 0])
 	pending_knockback = Vector3(kb[0], kb[1], kb[2])
@@ -467,33 +471,43 @@ func _update_facing() -> void:
 			facing = new_facing
 			InputManager.set_facing(player_id, facing)
 
-	# Misaligned state — after being sidestepped, don't auto-face opponent
-	# Must press a directional input or attack to realign
+	# Misaligned state — after being sidestepped, can't block until realigned.
+	# Defender must press a direction or attack to begin turning back.
+	# Guard restores after REALIGN_GUARD_FRAMES of active turning — fair race
+	# between stepper attacking and defender reacting.
 	if is_misaligned:
 		var input_bits = input_buffer.get_current()
 		var has_directional = (input_bits & (InputManager.INPUT_FORWARD | InputManager.INPUT_BACK | InputManager.INPUT_UP | InputManager.INPUT_DOWN)) != 0
 		var has_attack = (input_bits & (InputManager.INPUT_BUTTON1 | InputManager.INPUT_BUTTON2 | InputManager.INPUT_BUTTON3 | InputManager.INPUT_BUTTON4)) != 0
 
 		# Training mode: auto-realign after a delay
-		if GameManager.training_mode:
+		if GameManager.training_mode and not (has_directional or has_attack):
 			misalign_timer += 1
 			if misalign_timer >= 30:  # ~0.5 seconds
 				has_directional = true
 
-		if has_directional or has_attack:
-			# Realign with slight delay — smooth turn toward opponent
+		# Once started, realignment continues even if input is released
+		if realign_frames > 0:
+			realign_frames += 1
+		elif has_directional or has_attack:
+			realign_frames = 1  # Begin realignment
+
+		if realign_frames > 0:
+			# Smooth turn toward opponent
 			var look_target = Vector3(opponent.global_position.x, global_position.y, opponent.global_position.z)
 			if global_position.distance_to(look_target) > 0.01:
 				var target_transform = global_transform.looking_at(look_target, Vector3.UP)
 				var delta = get_physics_process_delta_time()
 				global_transform = global_transform.interpolate_with(target_transform, REALIGN_TURN_SPEED * delta)
 
-				# Check if we're close enough to consider realigned
 				var angle_diff = global_transform.basis.z.angle_to(target_transform.basis.z)
-				if angle_diff < 0.1:  # ~6 degrees
+				# Guard restores after brief turn commitment, or immediately if visually aligned
+				if realign_frames >= REALIGN_GUARD_FRAMES or angle_diff < 0.1:
 					is_misaligned = false
 					misalign_timer = 0
-					look_at(look_target, Vector3.UP)
+					realign_frames = 0
+					if angle_diff < 0.1:
+						look_at(look_target, Vector3.UP)
 		return  # Don't snap-face while misaligned
 
 	# Normal facing — instant look_at
@@ -505,6 +519,7 @@ func _update_facing() -> void:
 func trigger_realignment_delay() -> void:
 	is_misaligned = true
 	misalign_timer = 0
+	realign_frames = 0
 
 
 func _enforce_min_distance() -> void:

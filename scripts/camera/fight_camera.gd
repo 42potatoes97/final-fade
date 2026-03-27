@@ -28,7 +28,7 @@ extends Camera3D
 
 # Wall avoidance
 @export var wall_margin: float = 0.8
-const WALL_FADE_ALPHA: float = 0.15
+const WALL_FADE_ALPHA: float = 0.05  # 5% opacity when any wall occludes the fighters
 
 # Screen shake
 var _shake_intensity: float = 0.0
@@ -234,38 +234,48 @@ func _update_wall_transparency(look_target: Vector3) -> void:
 	if _space_state == null:
 		return
 
-	var blocking_walls: Dictionary = {}
-
-	# Raycast from camera to both fighters AND midpoint
-	var targets = [look_target]
+	# Check if ANY wall is occluding the fighters or midpoint
+	var any_wall_blocking := false
+	var targets := [look_target]
 	if fighter1:
 		targets.append(fighter1.global_position + Vector3(0, 0.9, 0))
 	if fighter2:
 		targets.append(fighter2.global_position + Vector3(0, 0.9, 0))
 
 	for target in targets:
-		var query = PhysicsRayQueryParameters3D.create(global_position, target)
+		var query := PhysicsRayQueryParameters3D.create(global_position, target)
 		query.collision_mask = 1
 		query.exclude = _exclude_rids
+		var result := _space_state.intersect_ray(query)
+		if not result.is_empty() and result.collider and result.collider.name.begins_with("Wall"):
+			any_wall_blocking = true
+			break
 
-		var result = _space_state.intersect_ray(query)
-		if not result.is_empty():
-			var collider = result.collider
-			if collider and collider.name.begins_with("Wall"):
-				blocking_walls[collider] = true
+	# Collect all stage walls (cached after first call)
+	var all_walls := _get_all_walls()
 
-	# Fade blocking walls
-	for wall in blocking_walls:
-		if not _faded_walls.has(wall):
-			_fade_wall(wall, true)
+	if any_wall_blocking:
+		# Fade every wall so nothing blocks the view
+		for wall in all_walls:
+			if not _faded_walls.has(wall):
+				_fade_wall(wall, true)
+	else:
+		# No occlusion — restore all walls to full opacity
+		var to_restore := _faded_walls.keys()
+		for wall in to_restore:
+			_fade_wall(wall, false)
 
-	# Restore non-blocking walls
-	var to_restore = []
-	for wall in _faded_walls:
-		if not blocking_walls.has(wall):
-			to_restore.append(wall)
-	for wall in to_restore:
-		_fade_wall(wall, false)
+
+func _get_all_walls() -> Array:
+	# Walk the scene to find all Wall* StaticBody3D nodes under the Stage node
+	var stage := get_tree().get_root().find_child("Stage", true, false)
+	if stage == null:
+		return []
+	var walls: Array = []
+	for child in stage.get_children():
+		if child.name.begins_with("Wall"):
+			walls.append(child)
+	return walls
 
 
 func _fade_wall(wall_body: Node, fade: bool) -> void:

@@ -8,9 +8,27 @@ extends Control
 const STAGES = [
 	{
 		"name": "Training Room",
-		"desc": "Medium walled arena (14m)",
+		"desc": "Infinite flat stage — no walls",
+		"path": "res://scenes/stages/stage_infinite.tscn",
+		"color": Color(0.28, 0.28, 0.32),
+	},
+	{
+		"name": "The Pit",
+		"desc": "Small octagon arena (10m across)",
+		"path": "res://scenes/stages/stage_small.tscn",
+		"color": Color(0.35, 0.2, 0.15),
+	},
+	{
+		"name": "The Ring",
+		"desc": "Medium octagon arena (24m across)",
 		"path": "res://scenes/stages/stage_medium.tscn",
-		"color": Color(0.3, 0.3, 0.35),
+		"color": Color(0.25, 0.25, 0.3),
+	},
+	{
+		"name": "The Arena",
+		"desc": "Large octagon arena (36m across)",
+		"path": "res://scenes/stages/stage_large.tscn",
+		"color": Color(0.18, 0.22, 0.35),
 	},
 ]
 

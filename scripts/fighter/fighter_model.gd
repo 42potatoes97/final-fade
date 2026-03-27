@@ -423,6 +423,29 @@ func set_pose_crouch() -> void:
 	}, Vector3(0, -0.18, 0))
 
 
+func set_pose_crouch_enter() -> void:
+	# Natural crouch entry from df — same target as set_pose_crouch but slower blend
+	# blend_speed=16 means ~25% progress per frame → visibly leans in over 4 frames
+	# rather than snapping 75% in the first frame at blend_speed=45
+	idle_bob_active = false
+	blend_speed = 16.0
+	_set_pose({
+		"abdomen": Vector3(5, 0, 0),
+		"arm_l": Vector3(-52, 20, 73),
+		"forearm_l": Vector3(-3, 110, -1),
+		"arm_r": Vector3(-65, -21, -73),
+		"forearm_r": Vector3(5, -109, -1),
+		"torso": Vector3(37, 0, 0),
+		"head": Vector3(0, -1, -1),
+		"leg_l": Vector3(-42, 0, 0),
+		"shin_l": Vector3(112, 13, -6),
+		"foot_l": Vector3(-26, 13, 0),
+		"leg_r": Vector3(-80, -1, 0),
+		"shin_r": Vector3(78, 0, 0),
+		"foot_r": Vector3(-1, 0, 0),
+	}, Vector3(0, -0.18, 0))
+
+
 func set_pose_crouch_dash(progress: float) -> void:
 	# Wavedash — crouch pose with aggressive forward lean
 	idle_bob_active = false

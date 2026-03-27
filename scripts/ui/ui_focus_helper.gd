@@ -40,6 +40,9 @@ static func _find_buttons(node: Node) -> Array:
 	if node is BaseButton and node.visible and not node.disabled:
 		buttons.append(node)
 	for child in node.get_children():
-		if child.visible or child is BaseButton:
+		# SubViewport (and other non-CanvasItem nodes) don't have .visible —
+		# guard before accessing it to avoid a crash on the character select screen
+		var is_visible: bool = (child is CanvasItem and (child as CanvasItem).visible) or child is BaseButton
+		if is_visible:
 			buttons.append_array(_find_buttons(child))
 	return buttons

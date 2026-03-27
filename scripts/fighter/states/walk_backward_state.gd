@@ -1,7 +1,7 @@
 class_name WalkBackwardState
 extends FighterState
 
-const WALK_SPEED: float = 3.8  # Slower than forward walk — retreat loses ground
+const WALK_SPEED: float = 2.2  # Deliberate retreat — back walk should not be a free evasion tool
 var walk_phase: float = 0.0
 
 
@@ -44,7 +44,7 @@ func handle_input(input_bits: int) -> String:
 
 
 func tick(delta: float) -> String:
-	walk_phase += delta * 7.0
+	walk_phase += delta * 14.0  # Fast cycle = short shuffle steps, not big strides
 	var m = get_model()
 	if m:
 		m.set_pose_walk_backward(walk_phase)

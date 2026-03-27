@@ -28,6 +28,17 @@ const P2_SPAWN = Vector3(3, 0, 0)
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+
+	# Load the selected stage dynamically and swap out the placeholder
+	var existing_stage := get_node_or_null("Stage")
+	if existing_stage:
+		existing_stage.queue_free()
+	var stage_scene: PackedScene = load(GameManager.selected_stage)
+	if stage_scene:
+		var stage_instance := stage_scene.instantiate()
+		stage_instance.name = "Stage"
+		add_child(stage_instance)
+
 	# Wire up opponents
 	fighter1.player_id = 1
 	fighter2.player_id = 2

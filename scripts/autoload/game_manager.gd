@@ -21,7 +21,7 @@ var ai_mode: bool = false
 var online_mode: bool = false
 var ranked_mode: bool = false
 var ai_difficulty: Dictionary = {}  # block_rate, attack_rate, punish_rate
-var selected_stage: String = "res://scenes/stages/stage_medium.tscn"
+var selected_stage: String = "res://scenes/stages/stage_infinite.tscn"
 
 # Fighter classes
 enum FighterClass { DEFENSIVE, OFFENSIVE }
