@@ -127,9 +127,13 @@ func _webrtc_create_host_room() -> void:
 
 
 func _webrtc_join_room() -> void:
+	print("[NetworkManager] Joining WebRTC room: %s" % _pending_webrtc_code)
 	var peer = _webrtc_transport.create_client(_pending_webrtc_code)
 	if peer:
 		multiplayer.multiplayer_peer = peer
+		print("[NetworkManager] WebRTC client peer created, waiting for offer...")
+	else:
+		print("[NetworkManager] WebRTC create_client returned null peer")
 	_pending_webrtc_code = ""
 
 

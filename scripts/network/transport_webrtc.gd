@@ -10,6 +10,8 @@ signal connection_established
 signal connection_failed
 signal signaling_ready(room_id: String)
 
+var _cached_offer_payload: String = ""  # Cached for re-publishing
+
 const STUN_CONFIG: Dictionary = {
 	"iceServers": [
 		{"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]}
@@ -105,10 +107,14 @@ func _on_session_description_created(type: String, sdp: String) -> void:
 
 	if is_host:
 		var topic := "finalfade/room/%s/offer" % room_id
-		signaling.publish(topic, payload)
+		# Publish with retain so late-joining clients receive the offer
+		signaling.publish(topic, payload, true)
+		_cached_offer_payload = payload
+		print("[WebRTC] Offer published (retained) to %s" % topic)
 	else:
 		var topic := "finalfade/room/%s/answer" % room_id
 		signaling.publish(topic, payload)
+		print("[WebRTC] Answer published to %s" % topic)
 
 
 func _on_ice_candidate(media: String, index: int, sdp_name: String) -> void:
@@ -127,6 +133,10 @@ func _on_signaling_message(topic: String, payload: String) -> void:
 	if room_id.is_empty():
 		return
 
+	# Only process messages for our room
+	if ("finalfade/room/%s" % room_id) not in topic:
+		return
+
 	var parsed = JSON.parse_string(payload)
 	if parsed == null:
 		push_warning("TransportWebRTC: Failed to parse signaling message")
@@ -137,13 +147,15 @@ func _on_signaling_message(topic: String, payload: String) -> void:
 		var type: String = parsed.get("type", "")
 		var sdp: String = parsed.get("sdp", "")
 		if type == "offer" and not sdp.is_empty():
+			print("[WebRTC] Received offer, setting remote description (answer auto-generated)...")
 			rtc_peer.set_remote_description(type, sdp)
-			rtc_peer.create_answer()
+			# Answer is auto-generated via session_description_created signal
 
 	elif topic.ends_with("/answer") and is_host:
 		var type: String = parsed.get("type", "")
 		var sdp: String = parsed.get("sdp", "")
 		if type == "answer" and not sdp.is_empty():
+			print("[WebRTC] Received answer, connection establishing...")
 			rtc_peer.set_remote_description(type, sdp)
 
 	# Handle ICE candidates
@@ -152,6 +164,7 @@ func _on_signaling_message(topic: String, payload: String) -> void:
 		var index: int = parsed.get("index", 0)
 		var sdp: String = parsed.get("sdp", "")
 		if not media.is_empty() and not sdp.is_empty():
+			print("[WebRTC] Received ICE candidate")
 			rtc_peer.add_ice_candidate(media, index, sdp)
 
 
