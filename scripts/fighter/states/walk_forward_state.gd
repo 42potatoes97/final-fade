@@ -33,7 +33,8 @@ func handle_input(input_bits: int) -> String:
 		return "SidestepUp"
 	if buf.detect_double_tap(IM.INPUT_DOWN):
 		return "SidestepDown"
-	if buf.just_pressed(IM.INPUT_UP):
+	# u/f = hop (already holding forward, just press UP to complete u/f)
+	if IM.has_flag(input_bits, IM.INPUT_UP):
 		return "Hop"
 	if IM.has_flag(input_bits, IM.INPUT_DOWN):
 		return "Crouch"

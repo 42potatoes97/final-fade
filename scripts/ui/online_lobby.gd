@@ -1,23 +1,30 @@
 extends Control
 
 # Online lobby — tabbed interface for online play
-# Tab 1: Direct Connect (host/join via room code, transport selection)
-# Tab 2: Browse Lobbies (discover and join rooms via MQTT broker)
-# Tab 3: Profile (view/edit identity, stats, export/import)
+# Profile must be set before accessing other tabs.
+# Tab 1: Profile (required first — set username to unlock other tabs)
+# Tab 2: Direct Connect (host/join via room code, transport selection)
+# Tab 3: Browse Lobbies (discover and join rooms via MQTT broker)
 # Tab 4: Ranked (matchmaking queue, rating display)
 # Tab 5: Leaderboard (sync & view global rankings)
 
+# --- State ---
+enum LobbyState { IDLE, HOSTING, JOINING, CONNECTED }
+var _state: LobbyState = LobbyState.IDLE
+var _profile_set: bool = false
+var _lobby_browsing: bool = false
+
 # --- Tab panels ---
+var profile_panel: VBoxContainer
 var direct_panel: VBoxContainer
 var lobbies_panel: VBoxContainer
-var profile_panel: VBoxContainer
 var ranked_panel: VBoxContainer
 var leaderboard_panel: VBoxContainer
 
 # --- Tab buttons ---
+var tab_profile_btn: Button
 var tab_direct_btn: Button
 var tab_lobbies_btn: Button
-var tab_profile_btn: Button
 var tab_ranked_btn: Button
 var tab_leaderboard_btn: Button
 
@@ -26,6 +33,7 @@ var transport_enet_btn: Button
 var transport_webrtc_btn: Button
 var host_btn: Button
 var join_btn: Button
+var cancel_btn: Button
 var code_display: Label
 var copy_btn: Button
 var code_field: LineEdit
@@ -38,15 +46,19 @@ var start_btn: Button
 var lobby_status_label: Label
 var room_list_container: VBoxContainer
 var lobby_connect_btn: Button
+var lobby_create_btn: Button
 var lobby_refresh_btn: Button
-var _room_rows: Dictionary = {}  # room_id -> HBoxContainer
+var _room_rows: Dictionary = {}
 
 # --- Profile widgets ---
 var username_field: LineEdit
 var profile_id_label: Label
 var stats_label: Label
+var profile_save_btn: Button
+var profile_status_label: Label
 var export_btn: Button
 var import_btn: Button
+var clear_data_btn: Button
 
 # --- Ranked widgets ---
 var ranked_rating_label: Label
@@ -55,7 +67,6 @@ var ranked_find_btn: Button
 var ranked_cancel_btn: Button
 var ranked_region_btn: OptionButton
 var ranked_range_label: Label
-# API token and auto-sync removed — shared app token, always-on sync
 
 # --- Leaderboard widgets ---
 var lb_list_container: VBoxContainer
@@ -67,13 +78,20 @@ var lb_refresh_btn: Button
 var _matchmaking: MatchmakingQueue = null
 var _leaderboard_mgr: LeaderboardManager = null
 var _ranked_config: RankedConfig = null
-var _ranked_tick_timer: float = 0.0
+var _lobby: LobbyDiscovery = null
 
 
 func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_profile_set = ProfileManager.username.length() > 0
 	_build_ui()
-	_switch_tab("direct")
+	UIFocusHelper.setup_focus(self)
+
+	# Start on profile if not set, otherwise direct
+	if _profile_set:
+		_switch_tab("direct")
+	else:
+		_switch_tab("profile")
 
 	# Network signals
 	NetworkManager.connected_to_peer.connect(_on_connected)
@@ -84,7 +102,6 @@ func _ready() -> void:
 	NetworkManager.public_ip_fetched.connect(_on_public_ip)
 	NetworkManager.room_code_ready.connect(_on_room_code_ready)
 
-	# Init ranked config
 	_ranked_config = RankedConfig.new()
 	_ranked_config.load_config()
 
@@ -94,7 +111,6 @@ func _ready() -> void:
 # =============================================================================
 
 func _build_ui() -> void:
-	# Background
 	var bg: ColorRect = ColorRect.new()
 	bg.color = Color(0.06, 0.06, 0.1)
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -113,46 +129,45 @@ func _build_ui() -> void:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	root_vbox.add_child(title)
 
-	# --- Tab bar ---
+	# Tab bar
 	var tab_bar: HBoxContainer = HBoxContainer.new()
 	tab_bar.alignment = BoxContainer.ALIGNMENT_CENTER
 	tab_bar.add_theme_constant_override("separation", 12)
 	root_vbox.add_child(tab_bar)
 
-	tab_direct_btn = _make_tab_button("DIRECT")
-	tab_direct_btn.pressed.connect(func(): _switch_tab("direct"))
-	tab_bar.add_child(tab_direct_btn)
-
-	tab_lobbies_btn = _make_tab_button("LOBBIES")
-	tab_lobbies_btn.pressed.connect(func(): _switch_tab("lobbies"))
-	tab_bar.add_child(tab_lobbies_btn)
-
 	tab_profile_btn = _make_tab_button("PROFILE")
 	tab_profile_btn.pressed.connect(func(): _switch_tab("profile"))
 	tab_bar.add_child(tab_profile_btn)
 
+	tab_direct_btn = _make_tab_button("DIRECT")
+	tab_direct_btn.pressed.connect(func(): _try_switch_tab("direct"))
+	tab_bar.add_child(tab_direct_btn)
+
+	tab_lobbies_btn = _make_tab_button("LOBBIES")
+	tab_lobbies_btn.pressed.connect(func(): _try_switch_tab("lobbies"))
+	tab_bar.add_child(tab_lobbies_btn)
+
 	tab_ranked_btn = _make_tab_button("RANKED")
-	tab_ranked_btn.pressed.connect(func(): _switch_tab("ranked"))
+	tab_ranked_btn.pressed.connect(func(): _try_switch_tab("ranked"))
 	tab_bar.add_child(tab_ranked_btn)
 
 	tab_leaderboard_btn = _make_tab_button("BOARD")
-	tab_leaderboard_btn.pressed.connect(func(): _switch_tab("leaderboard"))
+	tab_leaderboard_btn.pressed.connect(func(): _try_switch_tab("leaderboard"))
 	tab_bar.add_child(tab_leaderboard_btn)
 
-	# Separator line
 	var sep: HSeparator = HSeparator.new()
 	sep.add_theme_constant_override("separation", 8)
 	root_vbox.add_child(sep)
 
-	# --- Tab panels (all children of root, only one visible at a time) ---
+	# Tab panels
+	profile_panel = _build_profile_panel()
+	root_vbox.add_child(profile_panel)
+
 	direct_panel = _build_direct_panel()
 	root_vbox.add_child(direct_panel)
 
 	lobbies_panel = _build_lobbies_panel()
 	root_vbox.add_child(lobbies_panel)
-
-	profile_panel = _build_profile_panel()
-	root_vbox.add_child(profile_panel)
 
 	ranked_panel = _build_ranked_panel()
 	root_vbox.add_child(ranked_panel)
@@ -168,54 +183,241 @@ func _build_ui() -> void:
 	back_btn.pressed.connect(_on_back_pressed)
 	root_vbox.add_child(back_btn)
 
+	_update_tab_availability()
 
-# --- Tab button helper ---
 
 func _make_tab_button(label_text: String) -> Button:
 	var btn: Button = Button.new()
 	btn.text = label_text
-	btn.custom_minimum_size = Vector2(160, 42)
+	btn.custom_minimum_size = Vector2(140, 42)
 	btn.add_theme_font_size_override("font_size", 20)
 	return btn
 
 
-# --- Tab switching ---
+func _try_switch_tab(tab_name: String) -> void:
+	if not _profile_set and tab_name != "profile":
+		# Auto-generate a guest username so players can test immediately
+		ProfileManager.username = "Player_%d" % (randi() % 9999)
+		ProfileManager.save_profile()
+		_profile_set = true
+		_update_tab_availability()
+	_switch_tab(tab_name)
+
 
 func _switch_tab(tab_name: String) -> void:
+	profile_panel.visible = (tab_name == "profile")
 	direct_panel.visible = (tab_name == "direct")
 	lobbies_panel.visible = (tab_name == "lobbies")
-	profile_panel.visible = (tab_name == "profile")
 	ranked_panel.visible = (tab_name == "ranked")
 	leaderboard_panel.visible = (tab_name == "leaderboard")
 
-	# Highlight active tab
 	var gold: Color = Color(1.0, 0.85, 0.2)
 	var dim: Color = Color(0.6, 0.6, 0.7)
-	tab_direct_btn.add_theme_color_override("font_color", gold if tab_name == "direct" else dim)
-	tab_lobbies_btn.add_theme_color_override("font_color", gold if tab_name == "lobbies" else dim)
-	tab_profile_btn.add_theme_color_override("font_color", gold if tab_name == "profile" else dim)
-	tab_ranked_btn.add_theme_color_override("font_color", gold if tab_name == "ranked" else dim)
-	tab_leaderboard_btn.add_theme_color_override("font_color", gold if tab_name == "leaderboard" else dim)
+	var locked: Color = Color(0.3, 0.3, 0.4)
 
-	# Populate profile fields when switching to profile tab
+	tab_profile_btn.add_theme_color_override("font_color", gold if tab_name == "profile" else dim)
+	tab_direct_btn.add_theme_color_override("font_color", gold if tab_name == "direct" else (dim if _profile_set else locked))
+	tab_lobbies_btn.add_theme_color_override("font_color", gold if tab_name == "lobbies" else (dim if _profile_set else locked))
+	tab_ranked_btn.add_theme_color_override("font_color", gold if tab_name == "ranked" else (dim if _profile_set else locked))
+	tab_leaderboard_btn.add_theme_color_override("font_color", gold if tab_name == "leaderboard" else (dim if _profile_set else locked))
+
 	if tab_name == "profile":
 		_populate_profile()
-
-	# Populate rating display when switching to ranked tab
 	if tab_name == "ranked":
-		var rating = _get_local_rating()
-		ranked_rating_label.text = "Your Rating: %d" % rating
+		ranked_rating_label.text = "Your Rating: %d" % _get_local_rating()
+	if tab_name == "leaderboard" and _leaderboard_mgr:
+		var cached = _leaderboard_mgr.get_cached_entries()
+		if cached and cached.size() > 0:
+			_on_leaderboard_updated(cached)
 
-	# Populate leaderboard from cache when switching to leaderboard tab
-	if tab_name == "leaderboard":
-		if _leaderboard_mgr:
-			var cached = _leaderboard_mgr.get_cached_entries()
-			if cached and cached.size() > 0:
-				_on_leaderboard_updated(cached)
+
+func _update_tab_availability() -> void:
+	var locked: Color = Color(0.3, 0.3, 0.4)
+	var dim: Color = Color(0.6, 0.6, 0.7)
+	tab_direct_btn.add_theme_color_override("font_color", dim if _profile_set else locked)
+	tab_lobbies_btn.add_theme_color_override("font_color", dim if _profile_set else locked)
+	tab_ranked_btn.add_theme_color_override("font_color", dim if _profile_set else locked)
+	tab_leaderboard_btn.add_theme_color_override("font_color", dim if _profile_set else locked)
 
 
 # =============================================================================
-#  TAB 1 — DIRECT CONNECT
+#  TAB 1 — PROFILE (entry gate)
+# =============================================================================
+
+func _build_profile_panel() -> VBoxContainer:
+	var panel: VBoxContainer = VBoxContainer.new()
+	panel.add_theme_constant_override("separation", 14)
+	panel.alignment = BoxContainer.ALIGNMENT_CENTER
+
+	# Gate message
+	var gate_label: Label = Label.new()
+	gate_label.text = "Set your username to access online features"
+	gate_label.add_theme_font_size_override("font_size", 18)
+	gate_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.8))
+	gate_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	panel.add_child(gate_label)
+
+	# Username
+	var user_hbox: HBoxContainer = HBoxContainer.new()
+	user_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	user_hbox.add_theme_constant_override("separation", 10)
+	panel.add_child(user_hbox)
+
+	var user_prompt: Label = Label.new()
+	user_prompt.text = "Username:"
+	user_prompt.add_theme_font_size_override("font_size", 20)
+	user_hbox.add_child(user_prompt)
+
+	username_field = LineEdit.new()
+	username_field.custom_minimum_size = Vector2(220, 40)
+	username_field.add_theme_font_size_override("font_size", 20)
+	username_field.max_length = 24
+	user_hbox.add_child(username_field)
+
+	profile_save_btn = Button.new()
+	profile_save_btn.text = "SAVE"
+	profile_save_btn.custom_minimum_size = Vector2(80, 40)
+	profile_save_btn.add_theme_font_size_override("font_size", 18)
+	profile_save_btn.pressed.connect(_on_profile_save_pressed)
+	user_hbox.add_child(profile_save_btn)
+
+	# Profile status
+	profile_status_label = Label.new()
+	profile_status_label.text = ""
+	profile_status_label.add_theme_font_size_override("font_size", 18)
+	profile_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	panel.add_child(profile_status_label)
+
+	# Profile ID
+	var id_hbox: HBoxContainer = HBoxContainer.new()
+	id_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	id_hbox.add_theme_constant_override("separation", 10)
+	panel.add_child(id_hbox)
+
+	var id_prompt: Label = Label.new()
+	id_prompt.text = "Profile ID:"
+	id_prompt.add_theme_font_size_override("font_size", 18)
+	id_prompt.add_theme_color_override("font_color", Color(0.5, 0.5, 0.6))
+	id_hbox.add_child(id_prompt)
+
+	profile_id_label = Label.new()
+	profile_id_label.add_theme_font_size_override("font_size", 18)
+	profile_id_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.8))
+	id_hbox.add_child(profile_id_label)
+
+	var copy_id_btn: Button = Button.new()
+	copy_id_btn.text = "COPY"
+	copy_id_btn.custom_minimum_size = Vector2(80, 34)
+	copy_id_btn.add_theme_font_size_override("font_size", 14)
+	copy_id_btn.pressed.connect(func(): DisplayServer.clipboard_set(ProfileManager.profile_id))
+	id_hbox.add_child(copy_id_btn)
+
+	# Stats
+	stats_label = Label.new()
+	stats_label.add_theme_font_size_override("font_size", 20)
+	stats_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.9))
+	stats_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	panel.add_child(stats_label)
+
+	# Export / Import / Clear
+	var ei_hbox: HBoxContainer = HBoxContainer.new()
+	ei_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	ei_hbox.add_theme_constant_override("separation", 12)
+	panel.add_child(ei_hbox)
+
+	export_btn = Button.new()
+	export_btn.text = "EXPORT"
+	export_btn.custom_minimum_size = Vector2(120, 40)
+	export_btn.add_theme_font_size_override("font_size", 18)
+	export_btn.pressed.connect(_on_export_pressed)
+	ei_hbox.add_child(export_btn)
+
+	import_btn = Button.new()
+	import_btn.text = "IMPORT"
+	import_btn.custom_minimum_size = Vector2(120, 40)
+	import_btn.add_theme_font_size_override("font_size", 18)
+	import_btn.pressed.connect(_on_import_pressed)
+	ei_hbox.add_child(import_btn)
+
+	clear_data_btn = Button.new()
+	clear_data_btn.text = "CLEAR DATA"
+	clear_data_btn.custom_minimum_size = Vector2(140, 40)
+	clear_data_btn.add_theme_font_size_override("font_size", 18)
+	clear_data_btn.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2))
+	clear_data_btn.pressed.connect(_on_clear_data_pressed)
+	ei_hbox.add_child(clear_data_btn)
+
+	return panel
+
+
+func _populate_profile() -> void:
+	username_field.text = ProfileManager.username
+	# Lock username once set
+	username_field.editable = not _profile_set
+	profile_save_btn.visible = not _profile_set
+	profile_id_label.text = ProfileManager.profile_id.substr(0, 8) + "..."
+	var s: Dictionary = ProfileManager.stats
+	stats_label.text = "W: %d  /  L: %d  /  Total: %d" % [
+		s.get("wins", 0), s.get("losses", 0), s.get("total_matches", 0)
+	]
+
+
+func _on_profile_save_pressed() -> void:
+	var new_name: String = username_field.text.strip_edges()
+	if new_name.length() < 2:
+		profile_status_label.text = "Username must be at least 2 characters!"
+		profile_status_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2))
+		return
+	ProfileManager.username = new_name
+	ProfileManager.save_profile()
+	_profile_set = true
+	_populate_profile()
+	_update_tab_availability()
+	profile_status_label.text = "Username saved! Online features unlocked."
+	profile_status_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.5))
+
+
+func _on_clear_data_pressed() -> void:
+	ProfileManager.username = ""
+	ProfileManager.save_profile()
+	_profile_set = false
+	username_field.text = ""
+	username_field.editable = true
+	profile_save_btn.visible = true
+	_update_tab_availability()
+	_populate_profile()
+	profile_status_label.text = "Data cleared. Set a new username."
+	profile_status_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.3))
+	_switch_tab("profile")
+
+
+func _on_export_pressed() -> void:
+	var data: String = ProfileManager.export_profile()
+	DisplayServer.clipboard_set(data)
+	export_btn.text = "COPIED!"
+	get_tree().create_timer(1.5).timeout.connect(func(): export_btn.text = "EXPORT")
+
+
+func _on_import_pressed() -> void:
+	var clipboard: String = DisplayServer.clipboard_get().strip_edges()
+	if clipboard.length() == 0:
+		profile_status_label.text = "Clipboard is empty!"
+		profile_status_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2))
+		return
+	var success: bool = ProfileManager.import_profile(clipboard)
+	if success:
+		_profile_set = ProfileManager.username.length() > 0
+		_populate_profile()
+		_update_tab_availability()
+		profile_status_label.text = "Profile imported!"
+		profile_status_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.5))
+	else:
+		profile_status_label.text = "Invalid profile data!"
+		profile_status_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2))
+
+
+# =============================================================================
+#  TAB 2 — DIRECT CONNECT
 # =============================================================================
 
 func _build_direct_panel() -> VBoxContainer:
@@ -250,9 +452,9 @@ func _build_direct_panel() -> VBoxContainer:
 	transport_webrtc_btn.pressed.connect(func(): _select_transport("webrtc"))
 	transport_hbox.add_child(transport_webrtc_btn)
 
-	_select_transport("enet")  # default highlight
+	_select_transport("enet")
 
-	# Host / Join buttons
+	# Host / Join / Cancel buttons
 	var action_hbox: HBoxContainer = HBoxContainer.new()
 	action_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
 	action_hbox.add_theme_constant_override("separation", 20)
@@ -272,16 +474,26 @@ func _build_direct_panel() -> VBoxContainer:
 	join_btn.pressed.connect(_on_join_pressed)
 	action_hbox.add_child(join_btn)
 
+	cancel_btn = Button.new()
+	cancel_btn.text = "CANCEL"
+	cancel_btn.custom_minimum_size = Vector2(200, 50)
+	cancel_btn.add_theme_font_size_override("font_size", 22)
+	cancel_btn.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2))
+	cancel_btn.pressed.connect(_on_cancel_connection)
+	cancel_btn.visible = false
+	action_hbox.add_child(cancel_btn)
+
 	# Room code display (shown after hosting)
 	code_display = Label.new()
 	code_display.text = ""
-	code_display.add_theme_font_size_override("font_size", 36)
+	code_display.add_theme_font_size_override("font_size", 20)
 	code_display.add_theme_color_override("font_color", Color(0.3, 1.0, 0.5))
 	code_display.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	code_display.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	code_display.custom_minimum_size = Vector2(600, 0)
 	code_display.visible = false
 	panel.add_child(code_display)
 
-	# Copy button
 	copy_btn = Button.new()
 	copy_btn.text = "COPY CODE"
 	copy_btn.custom_minimum_size = Vector2(160, 40)
@@ -303,12 +515,12 @@ func _build_direct_panel() -> VBoxContainer:
 
 	code_field = LineEdit.new()
 	code_field.placeholder_text = "Enter code..."
-	code_field.custom_minimum_size = Vector2(250, 45)
-	code_field.add_theme_font_size_override("font_size", 22)
-	code_field.max_length = 16
+	code_field.custom_minimum_size = Vector2(400, 45)
+	code_field.add_theme_font_size_override("font_size", 18)
+	code_field.max_length = 200  # ENet codes can be ~130 chars
 	code_hbox.add_child(code_field)
 
-	# Port field (ENet only, small)
+	# Port field (ENet only)
 	var port_hbox: HBoxContainer = HBoxContainer.new()
 	port_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
 	port_hbox.add_theme_constant_override("separation", 10)
@@ -372,8 +584,6 @@ func _build_direct_panel() -> VBoxContainer:
 	return panel
 
 
-# --- Transport selection ---
-
 func _select_transport(transport_name: String) -> void:
 	NetworkManager.set_transport(transport_name)
 	var active_color: Color = Color(0.2, 1.0, 0.5)
@@ -383,7 +593,7 @@ func _select_transport(transport_name: String) -> void:
 
 
 # =============================================================================
-#  TAB 2 — BROWSE LOBBIES
+#  TAB 3 — BROWSE LOBBIES
 # =============================================================================
 
 func _build_lobbies_panel() -> VBoxContainer:
@@ -391,7 +601,7 @@ func _build_lobbies_panel() -> VBoxContainer:
 	panel.add_theme_constant_override("separation", 14)
 	panel.alignment = BoxContainer.ALIGNMENT_CENTER
 
-	# Connect / Refresh bar
+	# Top bar: Connect / Create / Refresh
 	var top_hbox: HBoxContainer = HBoxContainer.new()
 	top_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
 	top_hbox.add_theme_constant_override("separation", 12)
@@ -399,10 +609,19 @@ func _build_lobbies_panel() -> VBoxContainer:
 
 	lobby_connect_btn = Button.new()
 	lobby_connect_btn.text = "CONNECT TO LOBBY"
-	lobby_connect_btn.custom_minimum_size = Vector2(220, 44)
+	lobby_connect_btn.custom_minimum_size = Vector2(200, 44)
 	lobby_connect_btn.add_theme_font_size_override("font_size", 18)
 	lobby_connect_btn.pressed.connect(_on_lobby_connect_pressed)
 	top_hbox.add_child(lobby_connect_btn)
+
+	lobby_create_btn = Button.new()
+	lobby_create_btn.text = "CREATE LOBBY"
+	lobby_create_btn.custom_minimum_size = Vector2(180, 44)
+	lobby_create_btn.add_theme_font_size_override("font_size", 18)
+	lobby_create_btn.add_theme_color_override("font_color", Color(0.2, 1.0, 0.3))
+	lobby_create_btn.pressed.connect(_on_lobby_create_pressed)
+	lobby_create_btn.visible = true  # Always visible — auto-connects if needed
+	top_hbox.add_child(lobby_create_btn)
 
 	lobby_refresh_btn = Button.new()
 	lobby_refresh_btn.text = "REFRESH"
@@ -437,39 +656,85 @@ func _on_lobby_connect_pressed() -> void:
 	lobby_status_label.text = "Connecting to lobby..."
 	lobby_status_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.3))
 
+	_lobby = NetworkManager.get_lobby()
+	_lobby_browsing = true
+
+	if not _lobby.room_added.is_connected(_on_room_added):
+		_lobby.room_added.connect(_on_room_added)
+	if not _lobby.room_removed.is_connected(_on_room_removed):
+		_lobby.room_removed.connect(_on_room_removed)
+	if not _lobby.lobby_connected.is_connected(_on_lobby_connected):
+		_lobby.lobby_connected.connect(_on_lobby_connected)
+	if not _lobby.lobby_disconnected.is_connected(_on_lobby_disconnected):
+		_lobby.lobby_disconnected.connect(_on_lobby_disconnected)
+
+	# Must wait for broker connection before subscribing
 	var signaling: SignalingClient = NetworkManager.get_signaling()
-	signaling.connect_to_broker()
+	if signaling.is_connected_to_broker():
+		_lobby.start_browsing()
+	else:
+		signaling.connected.connect(_on_broker_connected_for_lobby, CONNECT_ONE_SHOT)
+		signaling.connect_to_broker()
 
-	var lobby: LobbyDiscovery = NetworkManager.get_lobby()
-	lobby.start_browsing()
 
-	# Connect lobby signals (safe to call multiple times — duplicates ignored)
-	if not lobby.room_added.is_connected(_on_room_added):
-		lobby.room_added.connect(_on_room_added)
-	if not lobby.room_removed.is_connected(_on_room_removed):
-		lobby.room_removed.connect(_on_room_removed)
-	if not lobby.lobby_connected.is_connected(_on_lobby_connected):
-		lobby.lobby_connected.connect(_on_lobby_connected)
-	if not lobby.lobby_disconnected.is_connected(_on_lobby_disconnected):
-		lobby.lobby_disconnected.connect(_on_lobby_disconnected)
+func _on_broker_connected_for_lobby() -> void:
+	if _lobby:
+		_lobby.start_browsing()
+
+
+func _on_lobby_create_pressed() -> void:
+	# Auto-connect to broker if not already browsing
+	if not _lobby_browsing:
+		_on_lobby_connect_pressed()
+
+	# Lobby always uses WebRTC (internet play)
+	_select_transport("webrtc")
+
+	# Wait for room code, then announce to lobby
+	if not NetworkManager.room_code_ready.is_connected(_on_lobby_room_code_ready):
+		NetworkManager.room_code_ready.connect(_on_lobby_room_code_ready, CONNECT_ONE_SHOT)
+	_switch_tab("direct")
+	_on_host_pressed()
+
+
+func _on_lobby_room_code_ready(code: String) -> void:
+	# Announce the room to the lobby with the room code
+	if _lobby == null:
+		return
+	var room: Dictionary = {
+		"room_id": code.left(16) if code.length() > 16 else code,
+		"host_name": ProfileManager.username if ProfileManager.username.length() > 0 else "Player",
+		"transport": NetworkManager.active_transport,
+		"region": "NA",
+		"status": "waiting",
+		"input_delay": 2,
+		"room_code": code,
+	}
+	_lobby.announce_room(room)
 
 
 func _on_lobby_refresh_pressed() -> void:
-	# Clear and re-browse
 	_clear_room_list()
-	var lobby: LobbyDiscovery = NetworkManager.get_lobby()
-	lobby.start_browsing()
+	if _lobby:
+		_lobby.start_browsing()
 	lobby_status_label.text = "Refreshing..."
 	lobby_status_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.3))
 
 
 func _on_lobby_connected() -> void:
 	_update_lobby_status()
+	lobby_create_btn.visible = true
+	lobby_connect_btn.text = "CONNECTED"
+	lobby_connect_btn.disabled = true
 
 
 func _on_lobby_disconnected() -> void:
 	lobby_status_label.text = "Lobby unavailable"
 	lobby_status_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2))
+	lobby_create_btn.visible = false
+	lobby_connect_btn.text = "CONNECT TO LOBBY"
+	lobby_connect_btn.disabled = false
+	_lobby_browsing = false
 
 
 func _on_room_added(room: Dictionary) -> void:
@@ -481,14 +746,12 @@ func _on_room_added(room: Dictionary) -> void:
 	row.add_theme_constant_override("separation", 16)
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 
-	# Host name
 	var host_label: Label = Label.new()
 	host_label.text = room.get("host_name", "Unknown")
 	host_label.add_theme_font_size_override("font_size", 18)
 	host_label.custom_minimum_size = Vector2(150, 0)
 	row.add_child(host_label)
 
-	# Transport
 	var transport_lbl: Label = Label.new()
 	transport_lbl.text = room.get("transport", "enet").to_upper()
 	transport_lbl.add_theme_font_size_override("font_size", 16)
@@ -496,7 +759,6 @@ func _on_room_added(room: Dictionary) -> void:
 	transport_lbl.custom_minimum_size = Vector2(80, 0)
 	row.add_child(transport_lbl)
 
-	# Region
 	var region_lbl: Label = Label.new()
 	region_lbl.text = room.get("region", "—")
 	region_lbl.add_theme_font_size_override("font_size", 16)
@@ -504,15 +766,6 @@ func _on_room_added(room: Dictionary) -> void:
 	region_lbl.custom_minimum_size = Vector2(60, 0)
 	row.add_child(region_lbl)
 
-	# Delay
-	var delay_lbl: Label = Label.new()
-	delay_lbl.text = str(room.get("delay", 2)) + "f"
-	delay_lbl.add_theme_font_size_override("font_size", 16)
-	delay_lbl.add_theme_color_override("font_color", Color(0.6, 0.6, 0.7))
-	delay_lbl.custom_minimum_size = Vector2(40, 0)
-	row.add_child(delay_lbl)
-
-	# Join button
 	var join_room_btn: Button = Button.new()
 	join_room_btn.text = "JOIN"
 	join_room_btn.custom_minimum_size = Vector2(80, 36)
@@ -535,11 +788,11 @@ func _on_room_removed(room_id: String) -> void:
 func _on_room_join_pressed(room: Dictionary) -> void:
 	var code: String = room.get("room_code", "")
 	if code.is_empty():
+		lobby_status_label.text = "Room has no connection code"
+		lobby_status_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2))
 		return
-	# Set transport to match the room
 	var transport: String = room.get("transport", "enet")
 	_select_transport(transport)
-	# Switch to direct tab so user sees connection status
 	_switch_tab("direct")
 	code_field.text = code
 	_on_join_pressed()
@@ -562,138 +815,6 @@ func _update_lobby_status() -> void:
 
 
 # =============================================================================
-#  TAB 3 — PROFILE
-# =============================================================================
-
-func _build_profile_panel() -> VBoxContainer:
-	var panel: VBoxContainer = VBoxContainer.new()
-	panel.add_theme_constant_override("separation", 14)
-	panel.alignment = BoxContainer.ALIGNMENT_CENTER
-
-	# Username
-	var user_hbox: HBoxContainer = HBoxContainer.new()
-	user_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	user_hbox.add_theme_constant_override("separation", 10)
-	panel.add_child(user_hbox)
-
-	var user_prompt: Label = Label.new()
-	user_prompt.text = "Username:"
-	user_prompt.add_theme_font_size_override("font_size", 20)
-	user_hbox.add_child(user_prompt)
-
-	username_field = LineEdit.new()
-	username_field.custom_minimum_size = Vector2(220, 40)
-	username_field.add_theme_font_size_override("font_size", 20)
-	username_field.max_length = 24
-	user_hbox.add_child(username_field)
-
-	var save_btn: Button = Button.new()
-	save_btn.text = "SAVE"
-	save_btn.custom_minimum_size = Vector2(80, 40)
-	save_btn.add_theme_font_size_override("font_size", 18)
-	save_btn.pressed.connect(_on_profile_save_pressed)
-	user_hbox.add_child(save_btn)
-
-	# Profile ID
-	var id_hbox: HBoxContainer = HBoxContainer.new()
-	id_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	id_hbox.add_theme_constant_override("separation", 10)
-	panel.add_child(id_hbox)
-
-	var id_prompt: Label = Label.new()
-	id_prompt.text = "Profile ID:"
-	id_prompt.add_theme_font_size_override("font_size", 18)
-	id_prompt.add_theme_color_override("font_color", Color(0.5, 0.5, 0.6))
-	id_hbox.add_child(id_prompt)
-
-	profile_id_label = Label.new()
-	profile_id_label.add_theme_font_size_override("font_size", 18)
-	profile_id_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.8))
-	id_hbox.add_child(profile_id_label)
-
-	var copy_id_btn: Button = Button.new()
-	copy_id_btn.text = "COPY FULL"
-	copy_id_btn.custom_minimum_size = Vector2(110, 34)
-	copy_id_btn.add_theme_font_size_override("font_size", 14)
-	copy_id_btn.pressed.connect(_on_copy_profile_id)
-	id_hbox.add_child(copy_id_btn)
-
-	# Stats
-	stats_label = Label.new()
-	stats_label.add_theme_font_size_override("font_size", 20)
-	stats_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.9))
-	stats_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	panel.add_child(stats_label)
-
-	# Export / Import
-	var ei_hbox: HBoxContainer = HBoxContainer.new()
-	ei_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	ei_hbox.add_theme_constant_override("separation", 12)
-	panel.add_child(ei_hbox)
-
-	export_btn = Button.new()
-	export_btn.text = "EXPORT PROFILE"
-	export_btn.custom_minimum_size = Vector2(180, 40)
-	export_btn.add_theme_font_size_override("font_size", 18)
-	export_btn.pressed.connect(_on_export_pressed)
-	ei_hbox.add_child(export_btn)
-
-	import_btn = Button.new()
-	import_btn.text = "IMPORT PROFILE"
-	import_btn.custom_minimum_size = Vector2(180, 40)
-	import_btn.add_theme_font_size_override("font_size", 18)
-	import_btn.pressed.connect(_on_import_pressed)
-	ei_hbox.add_child(import_btn)
-
-	return panel
-
-
-func _populate_profile() -> void:
-	username_field.text = ProfileManager.username
-	profile_id_label.text = ProfileManager.profile_id.substr(0, 8) + "..."
-	var s: Dictionary = ProfileManager.stats
-	stats_label.text = "W: %d  /  L: %d  /  Total: %d" % [
-		s.get("wins", 0), s.get("losses", 0), s.get("total_matches", 0)
-	]
-
-
-func _on_profile_save_pressed() -> void:
-	var new_name: String = username_field.text.strip_edges()
-	if new_name.length() > 0:
-		ProfileManager.username = new_name
-		ProfileManager.save_profile()
-		status_label.text = "Username saved!"
-		status_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.5))
-
-
-func _on_copy_profile_id() -> void:
-	DisplayServer.clipboard_set(ProfileManager.profile_id)
-
-
-func _on_export_pressed() -> void:
-	var data: String = ProfileManager.export_profile()
-	DisplayServer.clipboard_set(data)
-	export_btn.text = "COPIED!"
-	get_tree().create_timer(1.5).timeout.connect(func(): export_btn.text = "EXPORT PROFILE")
-
-
-func _on_import_pressed() -> void:
-	var clipboard: String = DisplayServer.clipboard_get().strip_edges()
-	if clipboard.length() == 0:
-		status_label.text = "Clipboard is empty!"
-		status_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2))
-		return
-	var success: bool = ProfileManager.import_profile(clipboard)
-	if success:
-		_populate_profile()
-		status_label.text = "Profile imported!"
-		status_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.5))
-	else:
-		status_label.text = "Invalid profile data!"
-		status_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2))
-
-
-# =============================================================================
 #  TAB 4 — RANKED
 # =============================================================================
 
@@ -702,7 +823,6 @@ func _build_ranked_panel() -> VBoxContainer:
 	panel.add_theme_constant_override("separation", 14)
 	panel.alignment = BoxContainer.ALIGNMENT_CENTER
 
-	# Rating display
 	ranked_rating_label = Label.new()
 	ranked_rating_label.text = "Your Rating: %d" % _get_local_rating()
 	ranked_rating_label.add_theme_font_size_override("font_size", 32)
@@ -710,7 +830,6 @@ func _build_ranked_panel() -> VBoxContainer:
 	ranked_rating_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	panel.add_child(ranked_rating_label)
 
-	# Find Match button
 	ranked_find_btn = Button.new()
 	ranked_find_btn.text = "FIND MATCH"
 	ranked_find_btn.custom_minimum_size = Vector2(220, 50)
@@ -719,7 +838,6 @@ func _build_ranked_panel() -> VBoxContainer:
 	ranked_find_btn.pressed.connect(_on_ranked_find_pressed)
 	panel.add_child(ranked_find_btn)
 
-	# Cancel button (hidden initially)
 	ranked_cancel_btn = Button.new()
 	ranked_cancel_btn.text = "CANCEL"
 	ranked_cancel_btn.custom_minimum_size = Vector2(220, 50)
@@ -729,7 +847,6 @@ func _build_ranked_panel() -> VBoxContainer:
 	ranked_cancel_btn.visible = false
 	panel.add_child(ranked_cancel_btn)
 
-	# Region dropdown
 	var region_hbox: HBoxContainer = HBoxContainer.new()
 	region_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
 	region_hbox.add_theme_constant_override("separation", 10)
@@ -750,7 +867,6 @@ func _build_ranked_panel() -> VBoxContainer:
 	ranked_region_btn.add_item("OC")
 	region_hbox.add_child(ranked_region_btn)
 
-	# Search range display
 	ranked_range_label = Label.new()
 	ranked_range_label.text = "Range: ---"
 	ranked_range_label.add_theme_font_size_override("font_size", 18)
@@ -758,7 +874,6 @@ func _build_ranked_panel() -> VBoxContainer:
 	ranked_range_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	panel.add_child(ranked_range_label)
 
-	# Status label
 	ranked_status_label = Label.new()
 	ranked_status_label.text = ""
 	ranked_status_label.add_theme_font_size_override("font_size", 20)
@@ -778,7 +893,6 @@ func _build_leaderboard_panel() -> VBoxContainer:
 	panel.add_theme_constant_override("separation", 14)
 	panel.alignment = BoxContainer.ALIGNMENT_CENTER
 
-	# Sync / Refresh bar
 	var top_hbox: HBoxContainer = HBoxContainer.new()
 	top_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
 	top_hbox.add_theme_constant_override("separation", 12)
@@ -798,7 +912,6 @@ func _build_leaderboard_panel() -> VBoxContainer:
 	lb_refresh_btn.pressed.connect(_on_lb_refresh_pressed)
 	top_hbox.add_child(lb_refresh_btn)
 
-	# Status
 	lb_status_label = Label.new()
 	lb_status_label.text = ""
 	lb_status_label.add_theme_font_size_override("font_size", 18)
@@ -806,7 +919,6 @@ func _build_leaderboard_panel() -> VBoxContainer:
 	lb_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	panel.add_child(lb_status_label)
 
-	# Scrollable list
 	var scroll: ScrollContainer = ScrollContainer.new()
 	scroll.custom_minimum_size = Vector2(700, 250)
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -817,7 +929,6 @@ func _build_leaderboard_panel() -> VBoxContainer:
 	lb_list_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(lb_list_container)
 
-	# Header row
 	_add_lb_row("#", "Username", "Rating", "W/L", "Matches", true)
 
 	return panel
@@ -828,9 +939,14 @@ func _build_leaderboard_panel() -> VBoxContainer:
 # =============================================================================
 
 func _on_ranked_find_pressed():
+	# Ensure lobby broker is connected first
+	var signaling: SignalingClient = NetworkManager.get_signaling()
+	if not signaling.is_connected_to_broker():
+		signaling.connect_to_broker()
+
 	if _matchmaking == null:
 		_matchmaking = MatchmakingQueue.new()
-		_matchmaking.init(NetworkManager.get_signaling())
+		_matchmaking.init(signaling)
 		_matchmaking.match_found.connect(_on_ranked_match_found)
 		_matchmaking.queue_status_changed.connect(_on_ranked_status_changed)
 
@@ -846,35 +962,35 @@ func _on_ranked_cancel_pressed():
 		_matchmaking.leave_queue()
 	ranked_find_btn.visible = true
 	ranked_cancel_btn.visible = false
+	ranked_status_label.text = ""
 
 
 func _on_ranked_match_found(opponent: Dictionary):
 	ranked_status_label.text = "Match found: " + opponent.get("username", "Unknown")
 	ranked_find_btn.visible = false
 	ranked_cancel_btn.visible = false
-	# Initiate connection — deterministic host selection already done by queue
+
 	GameManager.online_mode = true
 	GameManager.ranked_mode = true
 	GameManager.ai_mode = false
 	GameManager.training_mode = false
-	# The queue already determined who hosts
-	var code = opponent.get("room_code", "")
-	if code.is_empty():
-		# We are host
+
+	# Deterministic host: the queue already determined who hosts
+	var is_host: bool = opponent.get("is_host", false) == false  # If opponent is NOT host, we are
+	if is_host:
+		# We host — create room, announce code via MQTT for opponent to join
 		NetworkManager.host_game()
-		NetworkManager.start_game()
+		ranked_status_label.text = "Hosting... waiting for opponent to connect"
 	else:
-		NetworkManager.join_with_code(code)
+		# Opponent hosts — wait for their room code announcement
+		ranked_status_label.text = "Waiting for host's room code..."
+		# The matchmaking queue will publish the room code exchange on a per-match topic
 
 
 func _on_ranked_status_changed(status: String):
 	ranked_status_label.text = status.capitalize()
 	if _matchmaking:
 		ranked_range_label.text = "Range: ±%d" % _matchmaking.get_current_range()
-
-
-func _on_api_token_save_pressed():
-	pass  # No longer needed — shared app token used automatically
 
 
 func _get_local_rating() -> int:
@@ -893,7 +1009,6 @@ func _on_lb_sync_pressed():
 		_leaderboard_mgr.init(NetworkManager.get_signaling())
 		_leaderboard_mgr.load_local_data()
 		_leaderboard_mgr.leaderboard_updated.connect(_on_leaderboard_updated)
-
 	_leaderboard_mgr.publish_proof_chain("", self)
 	lb_status_label.text = "Syncing..."
 
@@ -910,13 +1025,9 @@ func _on_lb_refresh_pressed():
 
 
 func _on_leaderboard_updated(entries: Array):
-	# Clear existing rows
 	for child in lb_list_container.get_children():
 		child.queue_free()
-
-	# Build header
 	_add_lb_row("#", "Username", "Rating", "W/L", "Matches", true)
-
 	for i in range(entries.size()):
 		var e = entries[i]
 		_add_lb_row(
@@ -930,27 +1041,24 @@ func _on_leaderboard_updated(entries: Array):
 	lb_status_label.text = "%d players" % entries.size()
 
 
-func _add_lb_row(rank, name, rating, wl, matches, is_header: bool):
+func _add_lb_row(rank, username, rating, wl, matches, is_header: bool):
 	var row = HBoxContainer.new()
 	row.add_theme_constant_override("separation", 16)
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
-
 	var color = Color(0.8, 0.8, 0.3) if is_header else Color(0.8, 0.8, 0.9)
 	var font_size = 18 if is_header else 16
-
-	for data in [{"text": rank, "width": 40}, {"text": name, "width": 160}, {"text": rating, "width": 80}, {"text": wl, "width": 80}, {"text": matches, "width": 80}]:
+	for data in [{"text": rank, "width": 40}, {"text": username, "width": 160}, {"text": rating, "width": 80}, {"text": wl, "width": 80}, {"text": matches, "width": 80}]:
 		var lbl = Label.new()
 		lbl.text = str(data.text)
 		lbl.add_theme_font_size_override("font_size", font_size)
 		lbl.add_theme_color_override("font_color", color)
 		lbl.custom_minimum_size = Vector2(data.width, 0)
 		row.add_child(lbl)
-
 	lb_list_container.add_child(row)
 
 
 # =============================================================================
-#  DIRECT CONNECT — HOST / JOIN LOGIC
+#  DIRECT CONNECT — HOST / JOIN / CANCEL LOGIC
 # =============================================================================
 
 func _on_host_pressed() -> void:
@@ -960,41 +1068,13 @@ func _on_host_pressed() -> void:
 		status_label.text = "Starting server... fetching room code"
 	elif NetworkManager.active_transport == "webrtc":
 		NetworkManager.host_game()
-		status_label.text = "Creating WebRTC room..."
+		status_label.text = "Connecting to signaling broker..."
 	status_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.3))
-	host_btn.disabled = true
-	join_btn.disabled = true
-
-
-func _on_public_ip(ip: String) -> void:
-	# ENet: generate encrypted room code from public IP + port
-	var port: int = int(port_field.text)
-	var result: Dictionary = NetworkManager.generate_room_code(ip, port)
-	var code: String = result.get("code", "")
-	code_display.text = code
-	code_display.visible = true
-	copy_btn.visible = true
-	status_label.text = "Waiting for opponent..."
-	status_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.3))
-
-
-func _on_room_code_ready(code: String) -> void:
-	# WebRTC: signaling server provides the room code
-	code_display.text = code
-	code_display.visible = true
-	copy_btn.visible = true
-	status_label.text = "Waiting for opponent..."
-	status_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.3))
-
-
-func _on_copy_pressed() -> void:
-	DisplayServer.clipboard_set(code_display.text.strip_edges())
-	copy_btn.text = "COPIED!"
-	get_tree().create_timer(1.5).timeout.connect(func(): copy_btn.text = "COPY CODE")
+	_set_connection_state(LobbyState.HOSTING)
 
 
 func _on_join_pressed() -> void:
-	var code: String = code_field.text.strip_edges().to_upper()
+	var code: String = code_field.text.strip_edges()
 	if code.length() == 0:
 		status_label.text = "Enter a room code first!"
 		status_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2))
@@ -1008,8 +1088,62 @@ func _on_join_pressed() -> void:
 
 	status_label.text = "Connecting..."
 	status_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.3))
-	host_btn.disabled = true
-	join_btn.disabled = true
+	_set_connection_state(LobbyState.JOINING)
+
+
+func _on_cancel_connection() -> void:
+	NetworkManager.disconnect_peer()
+	status_label.text = "Cancelled."
+	status_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.7))
+	_set_connection_state(LobbyState.IDLE)
+
+
+func _set_connection_state(new_state: LobbyState) -> void:
+	_state = new_state
+	match new_state:
+		LobbyState.IDLE:
+			host_btn.visible = true
+			host_btn.disabled = false
+			join_btn.visible = true
+			join_btn.disabled = false
+			cancel_btn.visible = false
+			start_btn.visible = false
+			code_display.visible = false
+			copy_btn.visible = false
+		LobbyState.HOSTING, LobbyState.JOINING:
+			host_btn.visible = false
+			join_btn.visible = false
+			cancel_btn.visible = true
+			start_btn.visible = false
+		LobbyState.CONNECTED:
+			host_btn.visible = false
+			join_btn.visible = false
+			cancel_btn.visible = true
+
+
+func _on_public_ip(ip: String) -> void:
+	var port: int = int(port_field.text)
+	var result: Dictionary = NetworkManager.generate_room_code(ip, port)
+	var code: String = result.get("code", "")
+	code_display.text = code
+	code_display.visible = true
+	copy_btn.visible = true
+	status_label.text = "Waiting for opponent..."
+	status_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.3))
+
+
+func _on_room_code_ready(code: String) -> void:
+	code_display.text = code
+	code_display.visible = true
+	copy_btn.visible = true
+	status_label.text = "Waiting for opponent..."
+	status_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.3))
+
+
+func _on_copy_pressed() -> void:
+	DisplayServer.clipboard_set(code_display.text.strip_edges())
+	copy_btn.text = "COPIED!"
+	get_tree().create_timer(1.5).timeout.connect(func(): copy_btn.text = "COPY CODE")
 
 
 func _on_delay_changed(value: float) -> void:
@@ -1025,6 +1159,7 @@ func _on_delay_changed(value: float) -> void:
 func _on_connected() -> void:
 	status_label.text = "Connected!"
 	status_label.add_theme_color_override("font_color", Color(0.2, 1.0, 0.3))
+	_set_connection_state(LobbyState.CONNECTED)
 	if NetworkManager.is_host:
 		start_btn.visible = true
 	else:
@@ -1034,18 +1169,13 @@ func _on_connected() -> void:
 func _on_disconnected() -> void:
 	status_label.text = "Disconnected."
 	status_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2))
-	host_btn.disabled = false
-	join_btn.disabled = false
-	start_btn.visible = false
-	code_display.visible = false
-	copy_btn.visible = false
+	_set_connection_state(LobbyState.IDLE)
 
 
 func _on_failed() -> void:
 	status_label.text = "Connection failed! Check code and try again."
 	status_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2))
-	host_btn.disabled = false
-	join_btn.disabled = false
+	_set_connection_state(LobbyState.IDLE)
 
 
 func _on_auth_completed(_remote_profile: Dictionary) -> void:
@@ -1056,8 +1186,7 @@ func _on_auth_completed(_remote_profile: Dictionary) -> void:
 func _on_auth_failed(reason: String) -> void:
 	status_label.text = "Auth failed: " + reason
 	status_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2))
-	host_btn.disabled = false
-	join_btn.disabled = false
+	_set_connection_state(LobbyState.IDLE)
 
 
 # =============================================================================
@@ -1074,19 +1203,38 @@ func _on_start_pressed() -> void:
 
 
 func _on_back_pressed() -> void:
+	# If in connection state, cancel instead of leaving
+	if _state != LobbyState.IDLE:
+		_on_cancel_connection()
+		return
 	NetworkManager.disconnect_peer()
 	get_tree().change_scene_to_file("res://scenes/ui/main_menu.tscn")
 
 
 func _input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+	if InputManager.is_back_event(event):
 		_on_back_pressed()
 
 
 # =============================================================================
-#  PROCESS (matchmaking tick)
+#  PROCESS (lobby tick + matchmaking tick)
 # =============================================================================
 
+var _lobby_refresh_timer: float = 0.0
+const LOBBY_REFRESH_INTERVAL: float = 10.0  # Re-subscribe every 10s to catch missed rooms
+
 func _process(delta):
+	# Tick lobby discovery for heartbeats and stale cleanup
+	if _lobby_browsing and _lobby:
+		_lobby.tick(delta)
+		# Periodic re-subscribe to ensure we catch all rooms
+		_lobby_refresh_timer += delta
+		if _lobby_refresh_timer >= LOBBY_REFRESH_INTERVAL:
+			_lobby_refresh_timer = 0.0
+			var sig: SignalingClient = NetworkManager.get_signaling()
+			if sig.is_connected_to_broker():
+				_lobby.start_browsing()
+
+	# Tick matchmaking queue
 	if _matchmaking and _matchmaking.is_in_queue():
 		_matchmaking.tick(delta)

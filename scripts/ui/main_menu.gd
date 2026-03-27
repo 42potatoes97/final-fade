@@ -8,12 +8,18 @@ extends Control
 
 func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	UIFocusHelper.setup_focus(self, false)
+	$VBox/VersusBtn.grab_focus()
 
 
 func _on_versus_pressed() -> void:
 	# Toggle versus submenu
 	versus_submenu.visible = not versus_submenu.visible
 	ai_submenu.visible = false
+	if versus_submenu.visible:
+		$VBox/VersusSubmenu/LocalBtn.grab_focus()
+	else:
+		$VBox/VersusBtn.grab_focus()
 
 
 func _on_local_pressed() -> void:
@@ -38,6 +44,10 @@ func _on_ai_pressed() -> void:
 	# Toggle AI submenu
 	ai_submenu.visible = not ai_submenu.visible
 	versus_submenu.visible = false
+	if ai_submenu.visible:
+		$VBox/AISubmenu/ScriptedBtn.grab_focus()
+	else:
+		$VBox/AIBtn.grab_focus()
 
 
 func _on_scripted_ai_pressed() -> void:

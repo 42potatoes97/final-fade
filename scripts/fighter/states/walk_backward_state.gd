@@ -1,7 +1,7 @@
 class_name WalkBackwardState
 extends FighterState
 
-const WALK_SPEED: float = 4.5
+const WALK_SPEED: float = 3.8  # Slower than forward walk — retreat loses ground
 var walk_phase: float = 0.0
 
 
@@ -32,8 +32,6 @@ func handle_input(input_bits: int) -> String:
 		return "SidestepUp"
 	if buf.detect_double_tap(IM.INPUT_DOWN):
 		return "SidestepDown"
-	if buf.just_pressed(IM.INPUT_UP):
-		return "Hop"
 	if IM.has_flag(input_bits, IM.INPUT_DOWN):
 		return "Crouch"
 

@@ -135,6 +135,11 @@ func _on_message(topic: String, payload: String) -> void:
 	if Marshalls.base64_to_raw(sig_b64).size() != 32:
 		return  # Invalid HMAC-SHA256 signature length
 
+	# room_code: optional String (for joining)
+	var room_code = parsed.get("room_code", "")
+	if not room_code is String or room_code.length() > 200:
+		room_code = ""
+
 	# Strip to only validated fields
 	var clean_room: Dictionary = {
 		"room_id": rid,
@@ -144,6 +149,7 @@ func _on_message(topic: String, payload: String) -> void:
 		"status": status,
 		"input_delay": id_int,
 		"timestamp": ts,
+		"room_code": room_code,
 	}
 
 	if status == "closed":

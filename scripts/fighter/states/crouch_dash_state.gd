@@ -5,9 +5,9 @@ extends FighterState
 # Foundation of wavedash: cancel into standing, then immediately do another crouch dash
 # Can also cancel into attacks later
 
-const DASH_SPEED: float = 7.0
-const DASH_DURATION: int = 14  # frames
-const CANCELABLE_AFTER: int = 6  # Can cancel after this
+const DASH_SPEED: float = 7.5  # Slightly faster for better wavedash chains
+const DASH_DURATION: int = 12  # Tighter for snappier wavedash
+const CANCELABLE_AFTER: int = 4  # Cancel earlier — wavedash chains feel responsive
 const MIN_NEUTRAL_BEFORE_RECHAIN: int = 2  # Must be in neutral/forward for 2 frames before next CD
 
 var frame_counter: int = 0

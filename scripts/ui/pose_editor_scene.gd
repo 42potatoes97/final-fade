@@ -80,11 +80,75 @@ var preview_btn: Button = null
 const MOVE_LIST = [
 	"fight_stance", "jab", "jab_2", "power_straight", "high_crush",
 	"low_kick", "high_kick", "d_low_kick", "d_mid_punch",
-	"outward_backfist", "df_mid_check",
+	"outward_backfist", "df_mid_check", "d4_kick", "d3_3_rising",
 	"walk_forward", "walk_backward", "dash_forward", "backdash",
 	"sidestep", "crouch", "crouch_dash", "hop", "backsway",
-	"knockdown", "getup",
+	"knockdown", "getup", "getup_kick", "side_roll",
 ]
+
+# Map move names to their set_pose_* function names (if different)
+const MOVE_POSE_FUNC = {
+	"fight_stance": "set_pose_fight_stance",
+	"jab": "set_pose_jab",
+	"jab_2": "set_pose_jab_2",
+	"power_straight": "set_pose_power_straight",
+	"high_crush": "set_pose_high_crush",
+	"low_kick": "set_pose_low_kick",
+	"high_kick": "set_pose_high_kick",
+	"d_low_kick": "set_pose_d_low_kick",
+	"d_mid_punch": "set_pose_d_mid_punch",
+	"outward_backfist": "set_pose_outward_backfist",
+	"df_mid_check": "set_pose_df_mid_check",
+	"d4_kick": "set_pose_d4_kick",
+	"d3_3_rising": "set_pose_d3_3_rising",
+	"walk_forward": "set_pose_walk_forward",
+	"walk_backward": "set_pose_walk_backward",
+	"dash_forward": "set_pose_dash_forward",
+	"backdash": "set_pose_backdash",
+	"sidestep": "set_pose_sidestep",
+	"crouch": "set_pose_crouch",
+	"crouch_dash": "set_pose_crouch_dash",
+	"hop": "set_pose_hop",
+	"backsway": "set_pose_backsway",
+	"knockdown": "set_pose_knockdown",
+	"getup": "set_pose_getup",
+	"getup_kick": "set_pose_getup_kick",
+	"side_roll": "set_pose_side_roll",
+}
+
+const KF_SAVE_PATH = "user://pose_keyframes.json"
+
+# Impact progress for each move — the frame where the hit connects
+const MOVE_IMPACT_PROGRESS = {
+	"fight_stance": 0.0,
+	"jab": 0.5,
+	"jab_2": 0.5,
+	"power_straight": 0.5,
+	"high_crush": 0.5,
+	"low_kick": 0.4,
+	"high_kick": 0.35,
+	"d_low_kick": 0.45,
+	"d_mid_punch": 0.45,
+	"outward_backfist": 0.5,
+	"df_mid_check": 0.5,
+	"d4_kick": 0.5,
+	"d3_3_rising": 0.5,
+	"walk_forward": 0.25,
+	"walk_backward": 0.25,
+	"dash_forward": 0.5,
+	"backdash": 0.3,
+	"sidestep": 0.5,
+	"crouch": 0.0,
+	"crouch_dash": 0.5,
+	"hop": 0.5,
+	"backsway": 0.4,
+	"knockdown": 0.0,
+	"getup": 0.5,
+	"getup_kick": 0.5,
+	"side_roll": 0.5,
+}
+
+var preset_dropdown: OptionButton = null
 
 # Dummy opponent
 var dummy_node: Node3D
@@ -161,8 +225,10 @@ func _process(delta: float) -> void:
 			# Apply interpolated pose to sliders
 			for key in sliders:
 				sliders[key].value = 0
-			if root_offset_sliders.has("root_y"):
-				root_offset_sliders["root_y"].value = interp.root_y
+			var iro = interp.get("root_offset", Vector3.ZERO)
+			if root_offset_sliders.has("root_x"): root_offset_sliders["root_x"].value = iro.x
+			if root_offset_sliders.has("root_y"): root_offset_sliders["root_y"].value = iro.y
+			if root_offset_sliders.has("root_z"): root_offset_sliders["root_z"].value = iro.z
 			for jname in interp.pose:
 				var v = interp.pose[jname]
 				if sliders.has(jname + "_x"): sliders[jname + "_x"].value = v.x
@@ -341,27 +407,72 @@ func _build_ui() -> void:
 	root_label.add_theme_font_size_override("font_size", 14)
 	root_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(root_label)
+	_add_slider(vbox, "root_x", "X Offset", -1.0, 1.0, 0.0, true)
 	_add_slider(vbox, "root_y", "Y Offset", -0.5, 0.5, 0.0, true)
+	_add_slider(vbox, "root_z", "Z Offset", -1.0, 1.0, 0.0, true)
 
 	_add_separator(vbox)
 
-	# Preset buttons
+	# Preset section — dropdown with all moves + Default/Impact buttons
 	var preset_label = Label.new()
-	preset_label.text = "PRESETS"
-	preset_label.add_theme_font_size_override("font_size", 16)
+	preset_label.text = "━━━ POSE PRESETS ━━━"
+	preset_label.add_theme_font_size_override("font_size", 15)
+	preset_label.add_theme_color_override("font_color", Color(1.0, 0.8, 0.3))
 	preset_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(preset_label)
 
-	var preset_grid = GridContainer.new()
-	preset_grid.columns = 3
-	vbox.add_child(preset_grid)
+	# Move preset dropdown
+	preset_dropdown = OptionButton.new()
+	preset_dropdown.custom_minimum_size = Vector2(0, 30)
+	# Add base presets first
+	preset_dropdown.add_item("T-Pose")
+	preset_dropdown.add_item("Fight Stance")
+	preset_dropdown.add_item("Crouch")
+	preset_dropdown.add_separator("── Moves ──")
+	for move_name in MOVE_LIST:
+		preset_dropdown.add_item(move_name)
+	vbox.add_child(preset_dropdown)
 
-	for preset_name in ["T-Pose", "Fight Stance", "Crouch"]:
-		var btn = Button.new()
-		btn.text = preset_name
-		btn.custom_minimum_size = Vector2(120, 35)
-		btn.pressed.connect(_load_preset.bind(preset_name))
-		preset_grid.add_child(btn)
+	# Default / Impact / At Progress buttons
+	var preset_btn_grid = GridContainer.new()
+	preset_btn_grid.columns = 3
+	vbox.add_child(preset_btn_grid)
+
+	var load_default_btn = Button.new()
+	load_default_btn.text = "Default"
+	load_default_btn.custom_minimum_size = Vector2(120, 35)
+	load_default_btn.tooltip_text = "Load the move's starting pose (progress=0)"
+	load_default_btn.pressed.connect(_load_preset_at_progress.bind(0.0))
+	preset_btn_grid.add_child(load_default_btn)
+
+	var load_impact_btn = Button.new()
+	load_impact_btn.text = "Impact"
+	load_impact_btn.custom_minimum_size = Vector2(120, 35)
+	load_impact_btn.tooltip_text = "Load the move's impact/peak pose"
+	load_impact_btn.pressed.connect(_load_preset_at_impact)
+	preset_btn_grid.add_child(load_impact_btn)
+
+	var load_progress_btn = Button.new()
+	load_progress_btn.text = "At Progress"
+	load_progress_btn.custom_minimum_size = Vector2(120, 35)
+	load_progress_btn.tooltip_text = "Load the move at the current timeline progress"
+	load_progress_btn.pressed.connect(_load_move_pose)
+	preset_btn_grid.add_child(load_progress_btn)
+
+	# Save/Load keyframes to disk
+	var kf_io_grid = GridContainer.new()
+	kf_io_grid.columns = 2
+	vbox.add_child(kf_io_grid)
+	var save_kf_btn = Button.new()
+	save_kf_btn.text = "💾 Save Keyframes"
+	save_kf_btn.custom_minimum_size = Vector2(190, 35)
+	save_kf_btn.pressed.connect(_save_keyframes_to_disk)
+	kf_io_grid.add_child(save_kf_btn)
+	var load_kf_btn = Button.new()
+	load_kf_btn.text = "📂 Load Keyframes"
+	load_kf_btn.custom_minimum_size = Vector2(190, 35)
+	load_kf_btn.pressed.connect(_load_keyframes_from_disk)
+	kf_io_grid.add_child(load_kf_btn)
 
 	_add_separator(vbox)
 
@@ -517,9 +628,11 @@ func _apply_pose() -> void:
 			rot.z += sliders[z_key].value
 		joints[jname].rotation_degrees = rot
 
-	# Root offset
-	if root_offset_sliders.has("root_y"):
-		root_node.position = root_rest_pos + Vector3(0, root_offset_sliders["root_y"].value, 0)
+	# Root offset (X, Y, Z)
+	var rx = root_offset_sliders["root_x"].value if root_offset_sliders.has("root_x") else 0.0
+	var ry = root_offset_sliders["root_y"].value if root_offset_sliders.has("root_y") else 0.0
+	var rz = root_offset_sliders["root_z"].value if root_offset_sliders.has("root_z") else 0.0
+	root_node.position = root_rest_pos + Vector3(rx, ry, rz)
 
 
 func _load_preset(preset_name: String) -> void:
@@ -530,14 +643,16 @@ func _load_preset(preset_name: String) -> void:
 			pass  # All zeros
 		"Fight Stance":
 			values = {
-				"abdomen_x": 0, "torso_x": 2,
-				"head_y": -1, "head_z": -1,
-				"arm_l_x": -76, "arm_l_y": 20, "arm_l_z": 73,
-				"forearm_l_x": -10, "forearm_l_y": 79, "forearm_l_z": -1,
-				"arm_r_x": -81, "arm_r_y": -32, "arm_r_z": -73,
-				"forearm_r_x": 6, "forearm_r_y": -66,
-				"leg_l_x": 21, "shin_l_x": 34, "shin_l_y": 13, "shin_l_z": -6,
-				"leg_r_x": -39, "leg_r_y": -1, "shin_r_x": 34,
+				"abdomen_y": -38, "torso_x": 2,
+				"head_y": 13, "head_z": -1,
+				"arm_l_x": -54, "arm_l_y": 5, "arm_l_z": 73,
+				"forearm_l_x": -4, "forearm_l_y": 92, "forearm_l_z": 51,
+				"arm_r_x": -62, "arm_r_y": -12, "arm_r_z": -73,
+				"forearm_r_x": -12, "forearm_r_y": -66,
+				"leg_l_x": 5, "leg_l_y": -16,
+				"shin_l_x": 32, "shin_l_y": 4, "shin_l_z": -6,
+				"foot_l_x": -22, "foot_l_y": -51, "foot_l_z": 32,
+				"leg_r_x": -36, "leg_r_y": -3, "shin_r_x": 34,
 				"foot_r_x": -1,
 			}
 		"Crouch":
@@ -558,8 +673,8 @@ func _load_preset(preset_name: String) -> void:
 	# Reset all sliders first
 	for key in sliders:
 		sliders[key].value = 0
-	if root_offset_sliders.has("root_y"):
-		root_offset_sliders["root_y"].value = root_y
+	for key in root_offset_sliders:
+		root_offset_sliders[key].value = 0
 
 	# Apply preset values
 	for key in values:
@@ -598,10 +713,9 @@ func _generate_pose_output() -> String:
 			lines.append('\t"%s": Vector3(%d, %d, %d),' % [jname, xv, yv, zv])
 
 	# Root offset
-	var ry = root_offset_sliders.get("root_y", null)
-	var root_y_val = ry.value if ry else 0.0
-	if abs(root_y_val) > 0.005:
-		lines.append("}, Vector3(0, %.2f, 0))" % root_y_val)
+	var root_offset = _get_current_root_offset()
+	if root_offset.length() > 0.005:
+		lines.append("}, Vector3(%d, %d, %d))" % [int(root_offset.x), int(root_offset.y), int(root_offset.z)])
 	else:
 		lines.append("})")
 	lines.append("# --- END POSE ---")
@@ -632,9 +746,11 @@ func _get_current_slider_pose() -> Dictionary:
 	return pose
 
 
-func _get_current_root_y() -> float:
-	var ry = root_offset_sliders.get("root_y", null)
-	return snapped(ry.value, 0.01) if ry else 0.0
+func _get_current_root_offset() -> Vector3:
+	var rx = root_offset_sliders["root_x"].value if root_offset_sliders.has("root_x") else 0.0
+	var ry = root_offset_sliders["root_y"].value if root_offset_sliders.has("root_y") else 0.0
+	var rz = root_offset_sliders["root_z"].value if root_offset_sliders.has("root_z") else 0.0
+	return Vector3(snapped(rx, 0.01), snapped(ry, 0.01), snapped(rz, 0.01))
 
 
 func _capture_keyframe() -> void:
@@ -643,7 +759,7 @@ func _capture_keyframe() -> void:
 		return
 	var progress = snapped(progress_slider.value, 0.01)
 	var pose = _get_current_slider_pose()
-	var root_y = _get_current_root_y()
+	var root_off = _get_current_root_offset()
 
 	if not kf_data.has(current_move):
 		kf_data[current_move] = []
@@ -652,11 +768,11 @@ func _capture_keyframe() -> void:
 	var found = false
 	for i in range(kf_data[current_move].size()):
 		if absf(kf_data[current_move][i].progress - progress) < 0.005:
-			kf_data[current_move][i] = {"progress": progress, "pose": pose, "root_y": root_y}
+			kf_data[current_move][i] = {"progress": progress, "pose": pose, "root_offset": root_off}
 			found = true
 			break
 	if not found:
-		kf_data[current_move].append({"progress": progress, "pose": pose, "root_y": root_y})
+		kf_data[current_move].append({"progress": progress, "pose": pose, "root_offset": root_off})
 
 	kf_data[current_move].sort_custom(func(a, b): return a.progress < b.progress)
 	_refresh_keyframe_list()
@@ -682,8 +798,10 @@ func _on_keyframe_selected(idx: int) -> void:
 	# Load into sliders
 	for key in sliders:
 		sliders[key].value = 0
-	if root_offset_sliders.has("root_y"):
-		root_offset_sliders["root_y"].value = kf.root_y
+	var ro = kf.get("root_offset", Vector3(0, kf.get("root_y", 0), 0))
+	if root_offset_sliders.has("root_x"): root_offset_sliders["root_x"].value = ro.x
+	if root_offset_sliders.has("root_y"): root_offset_sliders["root_y"].value = ro.y
+	if root_offset_sliders.has("root_z"): root_offset_sliders["root_z"].value = ro.z
 	for jname in kf.pose:
 		var v = kf.pose[jname]
 		if sliders.has(jname + "_x"): sliders[jname + "_x"].value = v.x
@@ -698,7 +816,8 @@ func _refresh_keyframe_list() -> void:
 	if current_move == "" or not kf_data.has(current_move):
 		return
 	for kf in kf_data[current_move]:
-		keyframe_list.add_item("⏱ %.2f  (%d joints, rootY=%.2f)" % [kf.progress, kf.pose.size(), kf.root_y])
+		var ro = kf.get("root_offset", Vector3(0, kf.get("root_y", 0), 0))
+		keyframe_list.add_item("⏱ %.2f  (%d joints, root=%.1f,%.1f,%.1f)" % [kf.progress, kf.pose.size(), ro.x, ro.y, ro.z])
 
 
 func _toggle_preview() -> void:
@@ -721,8 +840,10 @@ func _interpolate_kfs(kfs: Array, progress: float) -> Dictionary:
 		if kfs[i].progress >= progress:
 			next_kf = kfs[i]
 			break
+	var prev_ro = prev_kf.get("root_offset", Vector3(0, prev_kf.get("root_y", 0), 0))
+	var next_ro = next_kf.get("root_offset", Vector3(0, next_kf.get("root_y", 0), 0))
 	if prev_kf.progress == next_kf.progress:
-		return {"pose": prev_kf.pose, "root_y": prev_kf.root_y}
+		return {"pose": prev_kf.pose, "root_offset": prev_ro}
 	var t = clampf((progress - prev_kf.progress) / (next_kf.progress - prev_kf.progress), 0.0, 1.0)
 	var result_pose = {}
 	var all_j = {}
@@ -730,7 +851,7 @@ func _interpolate_kfs(kfs: Array, progress: float) -> Dictionary:
 	for j in next_kf.pose: all_j[j] = true
 	for j in all_j:
 		result_pose[j] = prev_kf.pose.get(j, Vector3.ZERO).lerp(next_kf.pose.get(j, Vector3.ZERO), t)
-	return {"pose": result_pose, "root_y": lerpf(prev_kf.root_y, next_kf.root_y, t)}
+	return {"pose": result_pose, "root_offset": prev_ro.lerp(next_ro, t)}
 
 
 func _generate_move_code() -> void:
@@ -821,13 +942,175 @@ func _generate_all_code() -> void:
 			current_move = saved_move
 
 
+func _get_selected_preset_move() -> String:
+	# Get the move name from the preset dropdown
+	if preset_dropdown == null:
+		return ""
+	var idx = preset_dropdown.selected
+	var text = preset_dropdown.get_item_text(idx)
+	# Check if it's a base preset
+	if text in ["T-Pose", "Fight Stance", "Crouch"]:
+		return text
+	return text
+
+
+func _load_preset_at_progress(progress_val: float) -> void:
+	var move_name = _get_selected_preset_move()
+	if move_name in ["T-Pose", "Fight Stance", "Crouch"]:
+		_load_preset(move_name)
+		return
+	if move_name == "":
+		print("⚠ Select a move from the preset dropdown!")
+		return
+	_load_move_pose_at(move_name, progress_val)
+
+
+func _load_preset_at_impact() -> void:
+	var move_name = _get_selected_preset_move()
+	if move_name in ["T-Pose", "Fight Stance", "Crouch"]:
+		_load_preset(move_name)
+		return
+	if move_name == "":
+		print("⚠ Select a move from the preset dropdown!")
+		return
+	var impact = MOVE_IMPACT_PROGRESS.get(move_name, 0.5)
+	_load_move_pose_at(move_name, impact)
+
+
+func _load_move_pose() -> void:
+	# Load from preset dropdown at current timeline progress
+	var move_name = _get_selected_preset_move()
+	if move_name in ["T-Pose", "Fight Stance", "Crouch"]:
+		_load_preset(move_name)
+		return
+	if move_name == "":
+		# Fall back to batch move dropdown
+		move_name = current_move
+	if move_name == "":
+		print("⚠ Select a move first!")
+		return
+	var progress_val = progress_slider.value if progress_slider else 0.0
+	_load_move_pose_at(move_name, progress_val)
+
+
+func _load_move_pose_at(move_name: String, progress_val: float) -> void:
+	# Call the move's set_pose_* function at the given progress,
+	# then read joint rotations back into sliders.
+	var func_name = MOVE_POSE_FUNC.get(move_name, "set_pose_" + move_name)
+
+	# The model node is the fighter_model.gd script — call the pose function
+	if not model.has_method(func_name):
+		print("⚠ Model has no method: %s" % func_name)
+		return
+
+	# Temporarily enable the model's own pose application
+	model.editor_active = false
+	if func_name == "set_pose_fight_stance" or func_name == "set_pose_crouch" or func_name == "set_pose_knockdown":
+		model.call(func_name)
+	else:
+		model.call(func_name, progress_val)
+
+	# Force immediate blend (snap to target)
+	for path in model.target_rot:
+		if model.joints.has(path):
+			model.joints[path].rotation_degrees = model.rest_rotations.get(path, Vector3.ZERO) + model.target_rot[path]
+	model.root_node.position = model.root_rest_pos + model.current_root_offset
+
+	# Now read the resulting joint rotations back into sliders
+	for key in sliders:
+		sliders[key].value = 0
+
+	for jname in J:
+		if not joints.has(jname):
+			continue
+		var current_rot = joints[jname].rotation_degrees
+		var rest_rot = rest_rotations.get(jname, Vector3.ZERO)
+		var offset = current_rot - rest_rot
+		if sliders.has(jname + "_x"): sliders[jname + "_x"].value = snapped(offset.x, 1.0)
+		if sliders.has(jname + "_y"): sliders[jname + "_y"].value = snapped(offset.y, 1.0)
+		if sliders.has(jname + "_z"): sliders[jname + "_z"].value = snapped(offset.z, 1.0)
+
+	# Read root offset
+	var root_off = root_node.position - root_rest_pos
+	if root_offset_sliders.has("root_x"): root_offset_sliders["root_x"].value = snapped(root_off.x, 0.01)
+	if root_offset_sliders.has("root_y"): root_offset_sliders["root_y"].value = snapped(root_off.y, 0.01)
+	if root_offset_sliders.has("root_z"): root_offset_sliders["root_z"].value = snapped(root_off.z, 0.01)
+
+	model.editor_active = true
+	print("✅ Loaded '%s' at progress %.2f into sliders" % [move_name, progress_val])
+
+
+func _save_keyframes_to_disk() -> void:
+	# Serialize all keyframe data to JSON
+	var save_data = {}
+	for move_name in kf_data:
+		var kfs = []
+		for kf in kf_data[move_name]:
+			var kf_dict = {"progress": kf.progress}
+			var pose_dict = {}
+			for jname in kf.pose:
+				var v = kf.pose[jname]
+				pose_dict[jname] = [v.x, v.y, v.z]
+			kf_dict["pose"] = pose_dict
+			var ro = kf.get("root_offset", Vector3(0, kf.get("root_y", 0), 0))
+			kf_dict["root_offset"] = [ro.x, ro.y, ro.z]
+			kfs.append(kf_dict)
+		save_data[move_name] = kfs
+
+	var file = FileAccess.open(KF_SAVE_PATH, FileAccess.WRITE)
+	if file:
+		file.store_string(JSON.stringify(save_data, "\t"))
+		file.close()
+		print("✅ Keyframes saved to %s (%d moves)" % [KF_SAVE_PATH, save_data.size()])
+	else:
+		print("⚠ Failed to save keyframes")
+
+
+func _load_keyframes_from_disk() -> void:
+	if not FileAccess.file_exists(KF_SAVE_PATH):
+		print("⚠ No saved keyframes found at %s" % KF_SAVE_PATH)
+		return
+
+	var file = FileAccess.open(KF_SAVE_PATH, FileAccess.READ)
+	if not file:
+		print("⚠ Failed to open keyframe file")
+		return
+
+	var json = JSON.new()
+	var err = json.parse(file.get_as_text())
+	file.close()
+	if err != OK:
+		print("⚠ Failed to parse keyframe JSON")
+		return
+
+	kf_data.clear()
+	var data = json.data
+	for move_name in data:
+		kf_data[move_name] = []
+		for kf_dict in data[move_name]:
+			var pose = {}
+			for jname in kf_dict.get("pose", {}):
+				var arr = kf_dict["pose"][jname]
+				pose[jname] = Vector3(arr[0], arr[1], arr[2])
+			var ro_arr = kf_dict.get("root_offset", [0, 0, 0])
+			var ro = Vector3(ro_arr[0], ro_arr[1], ro_arr[2])
+			kf_data[move_name].append({
+				"progress": kf_dict.get("progress", 0.0),
+				"pose": pose,
+				"root_offset": ro,
+			})
+
+	_refresh_keyframe_list()
+	print("✅ Loaded keyframes from %s (%d moves)" % [KF_SAVE_PATH, kf_data.size()])
+
+
 func _go_back() -> void:
 	get_tree().change_scene_to_file("res://scenes/ui/main_menu.tscn")
 
 
 func _input(event: InputEvent) -> void:
 	# ESC to go back
-	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+	if InputManager.is_back_event(event):
 		_go_back()
 
 	# Camera orbit with right mouse

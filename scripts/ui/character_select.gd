@@ -58,6 +58,8 @@ var proceeding: bool = false
 func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_build_ui()
+	# Defer focus setup until UI is built
+	call_deferred("_setup_gamepad_focus")
 	# Auto-ready AI player (no human to control character select)
 	if GameManager.p1_device_type == InputManager.DeviceType.AI:
 		player_data[0].ready = true
@@ -444,7 +446,7 @@ func _read_device_input(pid: int) -> Dictionary:
 		result.down = Input.is_joy_button_pressed(dev_id, JOY_BUTTON_DPAD_DOWN) or stick_y > 0.5
 		result.left = Input.is_joy_button_pressed(dev_id, JOY_BUTTON_DPAD_LEFT) or stick_x < -0.5
 		result.right = Input.is_joy_button_pressed(dev_id, JOY_BUTTON_DPAD_RIGHT) or stick_x > 0.5
-		result.confirm = Input.is_joy_button_pressed(dev_id, JOY_BUTTON_A)
+		result.confirm = Input.is_joy_button_pressed(dev_id, JOY_BUTTON_X)  # Square/X = confirm
 
 	return result
 
@@ -467,6 +469,10 @@ func _save_and_proceed() -> void:
 	get_tree().create_timer(0.3).timeout.connect(func(): get_tree().change_scene_to_file("res://scenes/ui/stage_select.tscn"))
 
 
+func _setup_gamepad_focus() -> void:
+	UIFocusHelper.setup_focus(self)
+
+
 func _input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+	if InputManager.is_back_event(event):
 		get_tree().change_scene_to_file("res://scenes/ui/side_select.tscn")

@@ -7,8 +7,8 @@ extends FighterState
 #   3. Getup kick (press 3 or 4) — rising attack, punishable
 #   4. Side roll (press up or down) — dodge sideways
 
-const MIN_FLOOR_FRAMES: int = 16  # Must stay down at least this long (hard KD)
-const SOFT_MIN_FLOOR_FRAMES: int = 4  # Soft KD: wakeup options available almost immediately
+const MIN_FLOOR_FRAMES: int = 35  # Must stay down at least this long (hard KD, ~580ms)
+const SOFT_MIN_FLOOR_FRAMES: int = 8  # Soft KD: wakeup options available quickly but not instant
 const MAX_FLOOR_FRAMES: int = 90  # Auto-getup after this (prevent infinite stalling)
 const KD_SLIDE_SPEED: float = 3.0  # Slide away from attacker on KD (prevents loops)
 const KD_SLIDE_FRAMES: int = 10  # Frames of sliding

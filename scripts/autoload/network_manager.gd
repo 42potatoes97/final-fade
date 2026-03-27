@@ -35,6 +35,9 @@ var _session_key: PackedByteArray = PackedByteArray()
 var _packet_key: PackedByteArray = PackedByteArray()  # Derived from session key for HMAC
 var _auth_nonce: PackedByteArray = PackedByteArray()
 var _auth_timer: float = 0.0
+var _pending_webrtc_code: String = ""
+var _connect_timer: float = 0.0
+const CONNECT_TIMEOUT_SEC: float = 15.0
 var _auth_pending: bool = false
 
 # Transport instances
@@ -84,6 +87,7 @@ func set_transport(name: String) -> void:
 # --- Host / Join ---
 
 func host_game(port: int = 7000) -> void:
+	_connect_timer = 0.0
 	if active_transport == "enet":
 		var peer: ENetMultiplayerPeer = _enet_transport.create_host(port)
 		if peer == null:
@@ -98,13 +102,35 @@ func host_game(port: int = 7000) -> void:
 		fetch_public_ip()
 	elif active_transport == "webrtc":
 		_init_webrtc_transport()
-		var peer = _webrtc_transport.create_host()
-		if peer:
-			multiplayer.multiplayer_peer = peer
 		is_host = true
 		local_player_id = 1
 		remote_player_id = 2
 		connection_state = ConnectionState.HOSTING
+		# Must connect to signaling broker before creating offer
+		var sig := get_signaling()
+		if sig.is_connected_to_broker():
+			_webrtc_create_host_room()
+		else:
+			if not sig.connected.is_connected(_webrtc_create_host_room):
+				sig.connected.connect(_webrtc_create_host_room, CONNECT_ONE_SHOT)
+			sig.connect_to_broker()
+
+
+func _webrtc_create_host_room() -> void:
+	print("[NetworkManager] Creating WebRTC host room...")
+	var peer = _webrtc_transport.create_host()
+	if peer:
+		multiplayer.multiplayer_peer = peer
+		print("[NetworkManager] WebRTC host room created, room_id: %s" % _webrtc_transport.get_room_id())
+	else:
+		print("[NetworkManager] WebRTC create_host returned null peer")
+
+
+func _webrtc_join_room() -> void:
+	var peer = _webrtc_transport.create_client(_pending_webrtc_code)
+	if peer:
+		multiplayer.multiplayer_peer = peer
+	_pending_webrtc_code = ""
 
 
 func join_game(ip: String, port: int = 7000) -> void:
@@ -132,13 +158,19 @@ func join_with_code(code: String) -> bool:
 		return true
 	elif active_transport == "webrtc":
 		_init_webrtc_transport()
-		var peer = _webrtc_transport.create_client(code)
-		if peer:
-			multiplayer.multiplayer_peer = peer
 		is_host = false
 		local_player_id = 2
 		remote_player_id = 1
 		connection_state = ConnectionState.JOINING
+		_pending_webrtc_code = code
+		# Must connect to signaling broker before subscribing
+		var sig := get_signaling()
+		if sig.is_connected_to_broker():
+			_webrtc_join_room()
+		else:
+			if not sig.connected.is_connected(_webrtc_join_room):
+				sig.connected.connect(_webrtc_join_room, CONNECT_ONE_SHOT)
+			sig.connect_to_broker()
 		return true
 	return false
 
@@ -214,6 +246,20 @@ func send_input(frame: int, input_bits: int) -> void:
 
 func generate_room_code(ip: String, port: int) -> Dictionary:
 	return CryptoUtils.generate_room_code(ip, port)
+
+
+func announce_to_lobby(room_code: String) -> void:
+	if _lobby == null:
+		return
+	var pm = get_node_or_null("/root/ProfileManager")
+	_lobby.announce_room({
+		"room_id": room_code.substr(0, 16) if room_code.length() > 16 else room_code,
+		"room_code": room_code,
+		"host_name": pm.username if pm else "Unknown",
+		"transport": active_transport,
+		"region": "",
+		"delay": input_delay,
+	})
 
 
 # --- Auth Handshake ---
@@ -432,6 +478,15 @@ func _init_webrtc_transport() -> void:
 # --- Packet Processing ---
 
 func _process(delta: float) -> void:
+	# Connection timeout — only for JOINING (host waits indefinitely for opponent)
+	if connection_state == ConnectionState.JOINING:
+		_connect_timer += delta
+		if _connect_timer >= CONNECT_TIMEOUT_SEC:
+			_connect_timer = 0.0
+			connection_failed.emit()
+			disconnect_peer()
+			return
+
 	# Auth timeout
 	if _auth_pending:
 		_auth_timer += delta

@@ -3,13 +3,12 @@ extends FighterState
 
 # Neutral standing state — hub for all movement transitions
 #
-# UP/DOWN have a brief wait window before committing to hop/duck
+# UP = sidestep (double-tap), u/f = hop
+# DOWN has a brief wait window before committing to crouch
 # so double-tap sidestep has time to register.
 
-const UP_WAIT_FRAMES: int = 5  # Frames to wait after first UP before committing to hop (was 8, too sluggish)
-const DOWN_WAIT_FRAMES: int = 3  # Very responsive crouch — makes KBD harder, backsway comes out on sloppy input
+const DOWN_WAIT_FRAMES: int = 3  # Very responsive crouch
 
-var up_pending_frames: int = 0  # Counts up after first UP press
 var down_pending_frames: int = 0  # Counts up after first DOWN press
 var _pending_buffered_action: Dictionary = {}
 
@@ -17,7 +16,6 @@ var _pending_buffered_action: Dictionary = {}
 func enter(_prev_state: String) -> void:
 	fighter.velocity = Vector3.ZERO
 	fighter.is_crouching = false
-	up_pending_frames = 0
 	down_pending_frames = 0
 	var m = get_model()
 	if m:
@@ -64,35 +62,21 @@ func handle_input(input_bits: int) -> String:
 	if buf.detect_double_tap(IM.INPUT_BACK) and fighter.backdash_cooldown <= 0:
 		return "Backdash"
 
-	# Sidestep: double-tap up or down (cancels pending hop/duck)
+	# Sidestep: double-tap up or down
 	if buf.detect_double_tap(IM.INPUT_UP):
-		up_pending_frames = 0
 		return "SidestepUp"
 	if buf.detect_double_tap(IM.INPUT_DOWN):
 		down_pending_frames = 0
 		return "SidestepDown"
 
+	# u/f = hop (UP + FORWARD simultaneously, no wait needed)
+	if IM.has_flag(input_bits, IM.INPUT_UP) and IM.has_flag(input_bits, IM.INPUT_FORWARD):
+		return "Hop"
+
 	# --- Attack check ---
 	var attack_result = try_attack(input_bits)
 	if attack_result != "":
 		return attack_result
-
-	# --- UP handling: wait before hop ---
-	# Must HOLD up for the full wait to get hop. Releasing early cancels (no hop).
-	# This gives generous room for double-tap sidestep.
-	if buf.just_pressed(IM.INPUT_UP):
-		up_pending_frames = 1
-
-	if up_pending_frames > 0:
-		if IM.has_flag(input_bits, IM.INPUT_UP):
-			up_pending_frames += 1
-			if up_pending_frames >= UP_WAIT_FRAMES:
-				# Held long enough — commit to hop
-				up_pending_frames = 0
-				return "Hop"
-		else:
-			# Released UP early — cancel, no hop (allows clean double-tap)
-			up_pending_frames = 0
 
 	# --- DOWN handling: wait before duck ---
 	if buf.just_pressed(IM.INPUT_DOWN):
@@ -102,18 +86,17 @@ func handle_input(input_bits: int) -> String:
 		if IM.has_flag(input_bits, IM.INPUT_DOWN) or down_pending_frames < DOWN_WAIT_FRAMES:
 			down_pending_frames += 1
 			if down_pending_frames >= DOWN_WAIT_FRAMES:
-				# Waited long enough, no double-tap — commit to crouch
 				down_pending_frames = 0
 				return "Crouch"
 		else:
 			down_pending_frames = 0
 			return "Crouch"
 
-	# --- Walk (always responsive — up/down pending doesn't block lateral movement) ---
+	# --- Walk (forward only if UP not held, to avoid conflict with u/f hop) ---
 	var holding_fwd = IM.has_flag(input_bits, IM.INPUT_FORWARD)
 	var holding_back = IM.has_flag(input_bits, IM.INPUT_BACK)
 
-	if holding_fwd:
+	if holding_fwd and not IM.has_flag(input_bits, IM.INPUT_UP):
 		return "WalkForward"
 	if holding_back:
 		return "WalkBackward"
@@ -126,10 +109,9 @@ func save_state() -> Dictionary:
 	if ba.has("data") and ba.data != null and ba.data is Resource:
 		ba["data_cmd"] = ba.data.input_command
 		ba.erase("data")
-	return {"up": up_pending_frames, "down": down_pending_frames, "ba": ba}
+	return {"down": down_pending_frames, "ba": ba}
 
 func load_state(s: Dictionary) -> void:
-	up_pending_frames = s.get("up", 0)
 	down_pending_frames = s.get("down", 0)
 	var ba = s.get("ba", {})
 	if ba.has("data_cmd") and fighter and fighter.move_registry:

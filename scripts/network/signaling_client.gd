@@ -8,22 +8,37 @@ signal connected
 signal disconnected
 signal message_received(topic: String, payload: String)
 
-const BROKER_URL: String = "wss://broker.hivemq.com:8884/mqtt"
+# Mosquitto public broker — port 8080 plain WebSocket, 8081 WSS
+const BROKER_URL: String = "ws://test.mosquitto.org:8080/mqtt"
 const KEEPALIVE_SEC: float = 30.0
 
 var _ws: WebSocketPeer
 var _connected: bool = false
+var _connect_sent: bool = false  # Prevent re-sending MQTT CONNECT every frame
 var _subscriptions: Dictionary = {}
 var _keepalive_timer: float = 0.0
 var _packet_id_counter: int = 1
 
 
 func connect_to_broker() -> void:
+	if _connected:
+		return  # Already connected
+	_connect_sent = false
 	_ws = WebSocketPeer.new()
 	_ws.supported_protocols = PackedStringArray(["mqtt"])
-	var err := _ws.connect_to_url(BROKER_URL, TLSOptions.client())
+	var err: int
+	if BROKER_URL.begins_with("wss://"):
+		err = _ws.connect_to_url(BROKER_URL, TLSOptions.client_unsafe())
+	else:
+		err = _ws.connect_to_url(BROKER_URL)
 	if err != OK:
 		push_error("SignalingClient: WebSocket connect failed (error %d)" % err)
+	else:
+		print("[SignalingClient] Connecting to %s..." % BROKER_URL)
+
+
+func is_connected_to_broker() -> bool:
+	return _connected
 
 
 func disconnect_from_broker() -> void:
@@ -62,9 +77,11 @@ func _process(delta: float) -> void:
 	var state := _ws.get_ready_state()
 
 	if state == WebSocketPeer.STATE_OPEN:
-		if not _connected:
-			# WebSocket just opened, send MQTT CONNECT
+		if not _connected and not _connect_sent:
+			# WebSocket just opened, send MQTT CONNECT (once)
+			_connect_sent = true
 			_ws.put_packet(_build_connect_packet())
+			print("[SignalingClient] WebSocket open, MQTT CONNECT sent")
 
 		# Read all available packets
 		while _ws.get_available_packet_count() > 0:
@@ -79,10 +96,17 @@ func _process(delta: float) -> void:
 				_ws.put_packet(_build_pingreq_packet())
 
 	elif state == WebSocketPeer.STATE_CLOSED:
+		var close_code := _ws.get_close_code()
+		var close_reason := _ws.get_close_reason()
+		print("[SignalingClient] WebSocket closed (code=%d, reason='%s')" % [close_code, close_reason])
 		if _connected:
 			_connected = false
 			disconnected.emit()
+		_connect_sent = false
 		_ws = null
+
+	elif state == WebSocketPeer.STATE_CONNECTING:
+		pass  # Still connecting, wait
 
 
 # --- MQTT Packet Builders ---
@@ -209,6 +233,7 @@ func _parse_incoming(data: PackedByteArray) -> void:
 			2:  # CONNACK
 				_connected = true
 				_keepalive_timer = 0.0
+				print("[SignalingClient] CONNACK received — connected to broker!")
 				connected.emit()
 
 			3:  # PUBLISH

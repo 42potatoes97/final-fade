@@ -34,6 +34,7 @@ func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_detect_devices()
 	_build_ui()
+	UIFocusHelper.setup_focus(self)
 
 
 func _detect_devices() -> void:
@@ -441,7 +442,7 @@ func _update_difficulty_display() -> void:
 
 
 func _input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+	if InputManager.is_back_event(event):
 		if ai_difficulty_phase:
 			# Back out of difficulty selection
 			ai_difficulty_phase = false

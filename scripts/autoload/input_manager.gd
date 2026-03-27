@@ -214,3 +214,24 @@ func inject_input(player_id: int, input_bits: int) -> void:
 # Helper: check if a specific flag is set
 static func has_flag(input_bits: int, flag: int) -> bool:
 	return (input_bits & flag) != 0
+
+
+# Helper: check if event is a "back/cancel" press (Escape or Circle/B)
+static func is_back_event(event: InputEvent) -> bool:
+	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+		return true
+	if event is InputEventJoypadButton and event.pressed:
+		if event.button_index == JOY_BUTTON_B or event.button_index == JOY_BUTTON_BACK:
+			return true
+	return false
+
+
+# Helper: check if event is a "confirm/accept" press (Enter or Square/X)
+static func is_confirm_event(event: InputEvent) -> bool:
+	if event is InputEventKey and event.pressed:
+		if event.keycode == KEY_ENTER or event.keycode == KEY_J:
+			return true
+	if event is InputEventJoypadButton and event.pressed:
+		if event.button_index == JOY_BUTTON_X:  # Square on PS / X on Xbox
+			return true
+	return false

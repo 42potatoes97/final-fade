@@ -7,7 +7,7 @@ extends FighterState
 const STEP_SPEED: float = 8.0
 const STEP_DURATION: int = 10
 const SIDEWALK_TRANSITION: int = 8
-const CANCEL_FROM: int = 4  # Can cancel after 4 frames
+const CANCEL_FROM: int = 3  # Can cancel after 3 frames (snappy)
 
 var frame_counter: int = 0
 
@@ -55,6 +55,15 @@ func handle_input(input_bits: int) -> String:
 		# Crouch
 		if IM.has_flag(input_bits, IM.INPUT_DOWN) and IM.has_flag(input_bits, IM.INPUT_BACK):
 			return "Crouch"
+		# Walk forward (forward held, UP not held)
+		if IM.has_flag(input_bits, IM.INPUT_FORWARD) and not IM.has_flag(input_bits, IM.INPUT_UP):
+			return "WalkForward"
+		# Walk backward (back held, UP not held)
+		if IM.has_flag(input_bits, IM.INPUT_BACK) and not IM.has_flag(input_bits, IM.INPUT_UP):
+			return "WalkBackward"
+		# Hop (u/f)
+		if IM.has_flag(input_bits, IM.INPUT_UP) and IM.has_flag(input_bits, IM.INPUT_FORWARD):
+			return "Hop"
 		# Attack cancel
 		var attack_result = try_attack(input_bits)
 		if attack_result != "":

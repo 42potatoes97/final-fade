@@ -7,36 +7,58 @@ extends Node3D
 
 # Which limb each attack uses and its hit properties
 var attack_data: Dictionary = {
-	# Shared moves — tight hitboxes, must connect visually
-	"jab": {"limb": "hand_r", "hit_level": "high", "damage": 8, "hit_radius": 0.4, "max_range": 1.8},
-	"high_crush": {"limb": "hand_l", "hit_level": "mid", "damage": 35, "hit_radius": 0.75, "max_range": 2.2},
-	"low_kick": {"limb": "foot_l", "hit_level": "low", "damage": 12, "hit_radius": 0.35, "max_range": 1.8},
-	"high_kick": {"limb": "foot_l", "hit_level": "high", "damage": 18, "hit_radius": 0.4, "max_range": 2.0},
-	"d_low_kick": {"limb": "foot_l", "hit_level": "low", "damage": 14, "hit_radius": 0.35, "max_range": 1.8},
+	# Shared moves — per-limb sphere radii (compensated for smaller defender targets)
+	"jab": {"limb": "hand_r", "hit_level": "high", "damage": 8, "hit_radius": 0.5, "max_range": 1.8},
+	"high_crush": {"limb": "hand_l", "hit_level": "mid", "damage": 35, "hit_radius": 0.85, "max_range": 2.2},
+	"low_kick": {"limbs": ["foot_l", "shin_l"], "hit_level": "low", "damage": 12, "hit_radius": 0.45, "max_range": 1.8},
+	"high_kick": {"limbs": ["foot_l", "shin_l"], "hit_level": "high", "damage": 18, "hit_radius": 0.5, "max_range": 2.0},
+	"d_low_kick": {"limbs": ["foot_l", "shin_l"], "hit_level": "low", "damage": 14, "hit_radius": 0.45, "max_range": 1.8},
 	# Defensive exclusive
-	"jab_2": {"limb": "hand_l", "hit_level": "high", "damage": 8, "hit_radius": 0.35, "max_range": 1.8},
-	"power_straight": {"limb": "hand_r", "hit_level": "high", "damage": 22, "hit_radius": 0.4, "max_range": 2.0},
-	"df1_check": {"limb": "hand_r", "hit_level": "mid", "damage": 12, "hit_radius": 0.4, "max_range": 1.8},
-	"d_mid_punch": {"limb": "hand_r", "hit_level": "mid", "damage": 12, "hit_radius": 0.4, "max_range": 1.8},
+	"jab_2": {"limb": "hand_l", "hit_level": "high", "damage": 8, "hit_radius": 0.45, "max_range": 1.8},
+	"power_straight": {"limbs": ["hand_r", "forearm_r"], "hit_level": "high", "damage": 22, "hit_radius": 0.5, "max_range": 2.0},
+	"df1_check": {"limb": "hand_r", "hit_level": "mid", "damage": 12, "hit_radius": 0.5, "max_range": 1.8},
+	"d_mid_punch": {"limb": "hand_r", "hit_level": "mid", "damage": 12, "hit_radius": 0.5, "max_range": 1.8},
 	# Offensive exclusive
-	"d4_kick": {"limb": "foot_r", "hit_level": "low", "damage": 12, "hit_radius": 0.35, "max_range": 1.8},
-	"d4_4_power": {"limb": "foot_l", "hit_level": "high", "damage": 22, "hit_radius": 0.4, "max_range": 2.0},
-	"d3_3_rising": {"limb": "foot_r", "hit_level": "low", "damage": 20, "hit_radius": 0.4, "max_range": 2.0},
-	"high_kick_2": {"limb": "foot_r", "hit_level": "high", "damage": 20, "hit_radius": 0.4, "max_range": 2.0},
+	"d4_kick": {"limbs": ["foot_r", "shin_r"], "hit_level": "low", "damage": 12, "hit_radius": 0.45, "max_range": 1.8},
+	"d4_4_power": {"limbs": ["foot_l", "shin_l"], "hit_level": "high", "damage": 22, "hit_radius": 0.5, "max_range": 2.0},
+	"d3_3_rising": {"limbs": ["foot_r", "shin_r"], "hit_level": "low", "damage": 20, "hit_radius": 0.5, "max_range": 2.0},
+	"high_kick_2": {"limbs": ["foot_r", "shin_r"], "hit_level": "high", "damage": 20, "hit_radius": 0.5, "max_range": 2.0},
 }
 
-# Opponent hurtbox — capsule approximation (tight)
-const HURTBOX_RADIUS: float = 0.35
-const HURTBOX_HEIGHT_STAND: float = 1.8
-const HURTBOX_HEIGHT_CROUCH: float = 1.2
+# Per-body-part sphere radii (Tekken-style hurtboxes)
+const BODY_PART_SPHERES: Dictionary = {
+	"head":       {"joint": "Root/Abdomen/Torso/Head", "radius": 0.15},
+	"torso":      {"joint": "Root/Abdomen/Torso", "radius": 0.25},
+	"abdomen":    {"joint": "Root/Abdomen", "radius": 0.22},
+	"arm_l":      {"joint": "Root/Abdomen/Torso/ShoulderL/UpperArmL", "radius": 0.08},
+	"forearm_l":  {"joint": "Root/Abdomen/Torso/ShoulderL/UpperArmL/ForearmL", "radius": 0.07},
+	"hand_l":     {"joint": "Root/Abdomen/Torso/ShoulderL/UpperArmL/ForearmL/HandL", "radius": 0.06},
+	"arm_r":      {"joint": "Root/Abdomen/Torso/ShoulderR/UpperArmR", "radius": 0.08},
+	"forearm_r":  {"joint": "Root/Abdomen/Torso/ShoulderR/UpperArmR/ForearmR", "radius": 0.07},
+	"hand_r":     {"joint": "Root/Abdomen/Torso/ShoulderR/UpperArmR/ForearmR/HandR", "radius": 0.06},
+	"leg_l":      {"joint": "Root/HipL/UpperLegL", "radius": 0.10},
+	"shin_l":     {"joint": "Root/HipL/UpperLegL/LowerLegL", "radius": 0.08},
+	"foot_l":     {"joint": "Root/HipL/UpperLegL/LowerLegL/FootL", "radius": 0.07},
+	"leg_r":      {"joint": "Root/HipR/UpperLegR", "radius": 0.10},
+	"shin_r":     {"joint": "Root/HipR/UpperLegR/LowerLegR", "radius": 0.08},
+	"foot_r":     {"joint": "Root/HipR/UpperLegR/LowerLegR/FootR", "radius": 0.07},
+}
+
+# Which defender parts each hit level can connect with
+const HIT_LEVEL_TARGETS: Dictionary = {
+	"high": ["head", "torso", "arm_l", "arm_r", "forearm_l", "forearm_r", "hand_l", "hand_r"],
+	"mid":  ["torso", "abdomen", "arm_l", "arm_r", "forearm_l", "forearm_r"],
+	"low":  ["abdomen", "leg_l", "leg_r", "shin_l", "shin_r", "foot_l", "foot_r"],
+}
 
 var fighter: CharacterBody3D = null
 var active_attack: String = ""
 var has_hit: bool = false
 var _cached_model: Node3D = null
-var _cached_limbs: Dictionary = {}
+var _cached_limbs: Dictionary = {}  # Attacker limbs
+var _cached_opponent_limbs: Dictionary = {}  # Defender body part joints
 
-# Joint path mapping (must match fighter_model.gd J dict)
+# Joint path mapping for attacker limbs
 var limb_paths: Dictionary = {
 	"hand_l": "Root/Abdomen/Torso/ShoulderL/UpperArmL/ForearmL/HandL",
 	"hand_r": "Root/Abdomen/Torso/ShoulderR/UpperArmR/ForearmR/HandR",
@@ -58,6 +80,18 @@ func _cache_model_and_limbs() -> void:
 			var limb = _cached_model.get_node_or_null(path)
 			if limb:
 				_cached_limbs[limb_name] = limb
+
+
+func cache_opponent_limbs(opponent: CharacterBody3D) -> void:
+	_cached_opponent_limbs.clear()
+	var opp_model = opponent.get_node_or_null("Model")
+	if opp_model == null:
+		return
+	for part_name in BODY_PART_SPHERES:
+		var joint_path: String = BODY_PART_SPHERES[part_name]["joint"]
+		var joint = opp_model.get_node_or_null(joint_path)
+		if joint:
+			_cached_opponent_limbs[part_name] = joint
 
 
 # --- Rollback serialization ---
@@ -156,14 +190,10 @@ func check_hit() -> Dictionary:
 	if opponent.is_crouching and hit_level == "high":
 		return {}  # Highs whiff on crouching opponents
 
-	# Opponent body center
+	# Opponent body center (for facing/range checks)
 	var opp_pos = opponent.global_position
-	var opp_height = HURTBOX_HEIGHT_CROUCH if opponent.is_crouching else HURTBOX_HEIGHT_STAND
-	if opp_is_grounded:
-		opp_height = 0.3  # Very low hurtbox when on the ground
 
 	# Check if opponent is in front of fighter (prevent hitting behind)
-	# Homing moves have wider tracking angle — can hit sidestepped opponents
 	var to_opp = opp_pos - fighter.global_position
 	to_opp.y = 0
 	var fighter_dist = to_opp.length()
@@ -171,39 +201,46 @@ func check_hit() -> Dictionary:
 	var facing_dot = to_opp.normalized().dot(fwd)
 
 	if move_is_homing:
-		# Homing: only miss if opponent is completely behind (>135 degrees off)
 		if facing_dot < -0.7:
 			return {}
 	else:
-		# Linear: miss if opponent is to the side or behind
 		if facing_dot < -0.1:
 			return {}
 
-	# Max range fallback — if fighters are close enough, always check for hit
+	# Max range early-out
 	var max_range = data.get("max_range", 2.0)
 	if fighter_dist > max_range:
-		return {}  # Too far away, no need for limb check
+		return {}
 
-	# Try limb-based check first (tighter, more accurate)
-	var limb_name = data.get("limb", "hand_r")
-	var limb_global_pos = _get_limb_global_position(limb_name)
-	var limb_hit = false
+	# --- Per-limb sphere-vs-sphere hit detection ---
+	# Get attacker's attacking limb(s) position
+	var attack_limbs: Array = data.get("limbs", [data.get("limb", "hand_r")])
+	var hit_radius: float = data.get("hit_radius", 0.5)
+	var target_parts: Array = HIT_LEVEL_TARGETS.get(hit_level, [])
+	var limb_hit: bool = false
 
-	if limb_global_pos != Vector3.INF:
-		var limb_horiz = Vector3(limb_global_pos.x, 0, limb_global_pos.z)
-		var opp_horiz = Vector3(opp_pos.x, 0, opp_pos.z)
-		var horiz_dist = limb_horiz.distance_to(opp_horiz)
-		var hit_radius = data.get("hit_radius", 0.5)
-		var total_radius = hit_radius + HURTBOX_RADIUS
+	for atk_limb_name in attack_limbs:
+		var atk_pos: Vector3 = _get_limb_global_position(atk_limb_name)
+		if atk_pos == Vector3.INF:
+			continue
 
-		if horiz_dist <= total_radius:
-			# Vertical check with generous margin
-			var limb_y = limb_global_pos.y
-			var opp_base_y = opp_pos.y
-			if limb_y >= opp_base_y - 0.5 and limb_y <= opp_base_y + opp_height + 0.5:
+		# Check against each eligible defender body part sphere
+		for part_name in target_parts:
+			var part_joint = _cached_opponent_limbs.get(part_name)
+			if part_joint == null:
+				continue
+			var part_pos: Vector3 = part_joint.global_position
+			var part_radius: float = BODY_PART_SPHERES[part_name]["radius"]
+			var combined_radius: float = hit_radius + part_radius
+			var dist: float = atk_pos.distance_to(part_pos)
+
+			if dist <= combined_radius:
 				limb_hit = true
+				break
 
-	# No fallback — limb must actually connect
+		if limb_hit:
+			break
+
 	if not limb_hit:
 		return {}
 

@@ -6,6 +6,9 @@ extends RefCounted
 
 const REPLAY_DIR: String = "user://replays/"
 const MAX_LOCAL_REPLAYS: int = 50
+const FIREBASE_DB_URL: String = "https://final-fade-default-rtdb.firebaseio.com/"
+const IPFS_GATEWAY: String = "https://final-fade-default-rtdb.firebaseio.com/"  # Using Firebase instead of IPFS
+const WEB3_STORAGE_URL: String = "https://final-fade-default-rtdb.firebaseio.com/"  # Using Firebase instead of web3.storage
 
 # Input bit flags (mirror InputManager constants)
 const INPUT_FORWARD: int = 1

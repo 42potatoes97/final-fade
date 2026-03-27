@@ -25,7 +25,7 @@ var is_invulnerable: bool = false  # Brief invulnerability during backdash
 var is_misaligned: bool = false  # True when sidestepped — must actively realign
 var _cached_camera: Camera3D = null
 var backdash_cooldown: int = 0  # Frames before another raw dash (f,f or b,b) is allowed
-const BACKDASH_COOLDOWN_FRAMES: int = 8  # Short gap — wavedash/KBD clearly better than spam
+const BACKDASH_COOLDOWN_FRAMES: int = 12  # Must KBD or wavedash — no raw backdash spam
 var misalign_timer: int = 0  # Frames since misaligned (for training mode auto-realign)
 const REALIGN_TURN_SPEED: float = 8.0  # How fast we turn when realigning (radians/sec)
 
@@ -98,7 +98,7 @@ func _register_moves() -> void:
 	hcb.pushback_block = 2.0
 	hcb.wall_splat = true
 	hcb.causes_knockdown = true
-	hcb.forward_lunge = 0.07  # Forward rush for whiff punish range
+	hcb.forward_lunge = 0.10  # Forward rush for whiff punish range (tracks better vs backdash)
 	hcb.pose_name = "high_crush"
 	move_registry.register_move("2", hcb)
 
@@ -164,7 +164,7 @@ func _register_moves() -> void:
 	dlk.hit_level = "low"
 	dlk.knockback = 1.5
 	dlk.pushback_block = 1.8
-	dlk.forward_lunge = 0.04  # Small forward slide into sweep range
+	dlk.forward_lunge = 0.09  # Forward slide into sweep range
 	dlk.pose_name = "d_low_kick"
 	dlk.blockstun_frames = 2        # -20 on block
 	dlk.hitstop_frames = 8

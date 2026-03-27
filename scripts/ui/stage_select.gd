@@ -43,6 +43,7 @@ func _ready() -> void:
 	p1_device = InputManager.p1_device_id
 	p2_device = InputManager.p2_device_id
 	_build_ui()
+	UIFocusHelper.setup_focus(self)
 
 	# Auto-pick for CPU
 	if GameManager.ai_mode:
@@ -225,7 +226,7 @@ func _input(event: InputEvent) -> void:
 	if countdown_timer > 0:
 		return  # Already resolving
 
-	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+	if InputManager.is_back_event(event):
 		get_tree().change_scene_to_file("res://scenes/ui/character_select.tscn")
 		return
 
@@ -272,7 +273,7 @@ func _handle_player_input(event: InputEvent, player: int) -> void:
 			nav_left = true
 		elif event.button_index == JOY_BUTTON_DPAD_RIGHT:
 			nav_right = true
-		confirm = event.button_index == JOY_BUTTON_A or event.button_index == JOY_BUTTON_X
+		confirm = event.button_index == JOY_BUTTON_X  # Square/X = confirm
 	elif event is InputEventJoypadMotion:
 		if event.axis == JOY_AXIS_LEFT_X:
 			if event.axis_value < -0.5:

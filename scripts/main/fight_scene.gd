@@ -33,6 +33,11 @@ func _ready() -> void:
 	fighter2.player_id = 2
 	fighter1.opponent = fighter2
 	fighter2.opponent = fighter1
+	# Cache per-limb hit spheres for Tekken-style hit detection
+	if fighter1._hit_system:
+		fighter1._hit_system.cache_opponent_limbs(fighter2)
+	if fighter2._hit_system:
+		fighter2._hit_system.cache_opponent_limbs(fighter1)
 
 	# Set initial facing
 	InputManager.set_facing(1, 1)   # P1 faces right

@@ -4,9 +4,9 @@ extends FighterState
 # Forward dash: quick burst of forward movement (f, f input)
 # Can be canceled into crouch dash for wavedash
 
-const DASH_SPEED: float = 7.5
-const DASH_DURATION: int = 16  # frames — slight hop feel
-const CANCELABLE_AFTER: int = 6  # frames before cancel is allowed
+const DASH_SPEED: float = 8.5  # Faster than backdash — aggression should close space
+const DASH_DURATION: int = 14  # Shorter commitment
+const CANCELABLE_AFTER: int = 4  # Cancel earlier — can attack or block sooner
 
 var frame_counter: int = 0
 

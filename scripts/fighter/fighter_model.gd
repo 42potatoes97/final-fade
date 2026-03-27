@@ -56,13 +56,13 @@ const J = {
 
 # Fight stance base values (from pose editor, remapped: editor arm_l was ShoulderR)
 # arm_l = ShoulderL = viewer RIGHT, arm_r = ShoulderR = viewer LEFT
-const STANCE_ARM_L = Vector3(-76, 20, 73)     # Was editor "arm_r"
-const STANCE_FARM_L = Vector3(-10, 79, -1)
-const STANCE_ARM_R = Vector3(-81, -32, -73)   # Was editor "arm_l"
-const STANCE_FARM_R = Vector3(6, -66, 0)
-const STANCE_LEG_L = Vector3(21, 0, 0)        # Was editor "leg_r"
-const STANCE_SHIN_L = Vector3(34, 13, -6)
-const STANCE_LEG_R = Vector3(-39, -1, 0)      # Was editor "leg_l"
+const STANCE_ARM_L = Vector3(-54, 5, 73)
+const STANCE_FARM_L = Vector3(-4, 92, 51)
+const STANCE_ARM_R = Vector3(-62, -12, -73)
+const STANCE_FARM_R = Vector3(-12, -66, 0)
+const STANCE_LEG_L = Vector3(5, -16, 0)
+const STANCE_SHIN_L = Vector3(32, 4, -6)
+const STANCE_LEG_R = Vector3(-36, -3, 0)
 const STANCE_SHIN_R = Vector3(34, 0, 0)
 
 
@@ -157,17 +157,28 @@ func _set_pose(pose: Dictionary, root_offset: Vector3 = Vector3.ZERO) -> void:
 			target_rot[path] = pose[key]
 
 
+func _lerp_poses(a: Dictionary, b: Dictionary, t: float) -> Dictionary:
+	var result = a.duplicate()
+	for key in b:
+		if a.has(key):
+			result[key] = a[key].lerp(b[key], t)
+		else:
+			result[key] = b[key] * t
+	return result
+
+
 # ============================================================
 # FIGHT STANCE (from pose editor)
 # ============================================================
 func _get_stance_pose() -> Dictionary:
 	if _cached_stance_pose.is_empty():
 		_cached_stance_pose = {
+			"abdomen": Vector3(0, -38, 0),
+			"torso": Vector3(2, 0, 0), "head": Vector3(0, 13, -1),
 			"arm_l": STANCE_ARM_L, "forearm_l": STANCE_FARM_L,
 			"arm_r": STANCE_ARM_R, "forearm_r": STANCE_FARM_R,
-			"torso": Vector3(2, 0, 0), "head": Vector3(0, -1, -1),
 			"leg_l": STANCE_LEG_L, "shin_l": STANCE_SHIN_L,
-			"foot_l": Vector3(0, 0, 0),
+			"foot_l": Vector3(-22, -51, 32),
 			"leg_r": STANCE_LEG_R, "shin_r": STANCE_SHIN_R,
 			"foot_r": Vector3(-1, 0, 0),
 		}
@@ -178,17 +189,19 @@ func set_pose_fight_stance() -> void:
 	idle_bob_active = true
 	blend_speed = 25.0  # Snappy stance transitions (was 15)
 	_set_pose({
+		"abdomen": Vector3(0, -38, 0),
 		"torso": Vector3(2, 0, 0),
-		"head": Vector3(0, -1, -1),
-		"arm_l": STANCE_ARM_L,
-		"forearm_l": STANCE_FARM_L,
-		"arm_r": STANCE_ARM_R,
-		"forearm_r": STANCE_FARM_R,
-		"leg_l": STANCE_LEG_L,
-		"shin_l": STANCE_SHIN_L,
-		"foot_l": Vector3(-1, 0, 0),
-		"leg_r": STANCE_LEG_R,
-		"shin_r": STANCE_SHIN_R,
+		"head": Vector3(0, 13, -1),
+		"arm_l": Vector3(-54, 5, 73),
+		"forearm_l": Vector3(-4, 92, 51),
+		"arm_r": Vector3(-62, -12, -73),
+		"forearm_r": Vector3(-12, -66, 0),
+		"leg_l": Vector3(5, -16, 0),
+		"shin_l": Vector3(32, 4, -6),
+		"foot_l": Vector3(-22, -51, 32),
+		"leg_r": Vector3(-36, -3, 0),
+		"shin_r": Vector3(34, 0, 0),
+		"foot_r": Vector3(-1, 0, 0),
 	})
 
 
@@ -767,108 +780,82 @@ func set_pose_low_kick(progress: float) -> void:
 
 
 func set_pose_high_kick(progress: float) -> void:
-	# Spinning roundhouse — LEFT leg (viewer left = code leg_l)
-	# Full 360 spin: windup → kick peak → continue spin forward → land
+	# Roundhouse kick — 4 keyframes from pose editor
+	# Phases: windup (0-0.25), impact (0.25-0.45), recovery1 (0.45-0.7), recovery2 (0.7-1.0)
 	idle_bob_active = false
 	blend_speed = 33.0
-	# 5 phases for continuous forward rotation
-	var windup = clampf(progress / 0.15, 0.0, 1.0)       # 0-0.15: chamber
-	var peak = clampf((progress - 0.15) / 0.25, 0.0, 1.0) # 0.15-0.4: kick connects
-	var spin1 = clampf((progress - 0.4) / 0.2, 0.0, 1.0)  # 0.4-0.6: continue 180→270
-	var spin2 = clampf((progress - 0.6) / 0.2, 0.0, 1.0)  # 0.6-0.8: continue 270→360
-	var land = clampf((progress - 0.8) / 0.2, 0.0, 1.0)   # 0.8-1.0: settle into stance
-	var w = sin(windup * PI * 0.5)
-	var p = sin(peak * PI * 0.5)
-	var s1 = sin(spin1 * PI * 0.5)
-	var s2 = sin(spin2 * PI * 0.5)
-	var ln = sin(land * PI * 0.5)
-
-	# Torso Y rotation goes continuously forward: -20 → 71 → 180 → 290 → 360(=0)
-	var torso_y: float
-	var torso_x: float
-	var torso_z: float
-	# Leg poses through rotation
-	var leg_l_val: Vector3
-	var shin_l_val: Vector3
-	var leg_r_val: Vector3
-	var shin_r_val: Vector3
 
 	var stance = _get_stance_pose()
-	var pose = {}
 
-	if land > 0.01:
-		# 290→360 and settling back to stance
-		torso_y = lerp(290.0, 360.0, ln)
-		torso_x = lerp(2.0, 2.0, ln)
-		torso_z = lerp(-10.0, 0.0, ln)
-		# Leg comes down, feet find ground
-		leg_l_val = Vector3(-10, 290 + ln * 70, -20 + ln * 20).lerp(STANCE_LEG_L, ln)
-		shin_l_val = STANCE_SHIN_L
-		leg_r_val = Vector3(5, 290 + ln * 70, 0).lerp(STANCE_LEG_R, ln)
-		shin_r_val = STANCE_SHIN_R
-	elif spin2 > 0.01:
-		# 220→290: back is to opponent, leg tucking in
-		torso_y = lerp(220.0, 290.0, s2)
-		torso_x = lerp(0.0, 2.0, s2)
-		torso_z = lerp(-15.0, -10.0, s2)
-		leg_l_val = Vector3(-15, lerp(180.0, 290.0, s2), lerp(-60.0, -20.0, s2))
-		shin_l_val = Vector3(lerp(15.0, 34.0, s2), lerp(30.0, 13.0, s2), -6)
-		leg_r_val = Vector3(lerp(5.0, 5.0, s2), lerp(180.0, 290.0, s2), 0)
-		shin_r_val = Vector3(lerp(5.0, 3.0, s2), 0, 0)
-	elif spin1 > 0.01:
-		# 140→220: leg retracting, body keeps spinning
-		torso_y = lerp(140.0, 220.0, s1)
-		torso_x = lerp(5.0, 0.0, s1)
-		torso_z = lerp(-20.0, -15.0, s1)
-		leg_l_val = Vector3(lerp(-20.0, -15.0, s1), lerp(122.0, 180.0, s1), lerp(-138.0, -60.0, s1))
-		shin_l_val = Vector3(lerp(3.0, 15.0, s1), lerp(42.0, 30.0, s1), -6)
-		leg_r_val = Vector3(lerp(10.0, 5.0, s1), lerp(100.0, 180.0, s1), 0)
-		shin_r_val = Vector3(lerp(10.0, 5.0, s1), 0, 0)
-	elif peak > 0.01:
-		# -20→71→140: kick connects at peak
-		torso_y = lerp(-20.0, 71.0, p) + p * 69.0  # overshoots to ~140 at full p
-		torso_y = lerp(-20.0, 140.0, p)
-		torso_x = lerp(2.0, 5.0, p)
-		torso_z = lerp(0.0, -20.0, p) * p
-		# Peak pose from editor
-		leg_l_val = STANCE_LEG_L.lerp(Vector3(-42, 122, -138), p)
-		shin_l_val = STANCE_SHIN_L.lerp(Vector3(3, 42, -6), p)
-		leg_r_val = STANCE_LEG_R.lerp(Vector3(0, 68, 0), p)
-		shin_r_val = STANCE_SHIN_R.lerp(Vector3(3, 0, 0), p)
-	else:
-		# Windup: chamber and wind back
-		torso_y = lerp(0.0, -20.0, w)
-		torso_x = 2.0
-		torso_z = 0.0
-		leg_l_val = STANCE_LEG_L + Vector3(w * 15, 0, 0)
-		shin_l_val = STANCE_SHIN_L + Vector3(w * 25, 0, 0)
-		leg_r_val = STANCE_LEG_R
-		shin_r_val = STANCE_SHIN_R
-
-	# Wrap torso_y back to 0-360 range for display
-	var display_y = fmod(torso_y, 360.0)
-
-	# Arms follow the body rotation naturally
-	var arm_blend = clampf((torso_y + 20.0) / 380.0, 0.0, 1.0)  # 0 at start, 1 at end
-	pose = {
-		"torso": Vector3(torso_x, display_y, torso_z),
-		"head": Vector3(0, -1, -1),
-		"arm_l": STANCE_ARM_L,
-		"forearm_l": STANCE_FARM_L,
-		"arm_r": STANCE_ARM_R,
-		"forearm_r": STANCE_FARM_R,
-		"leg_l": leg_l_val,
-		"shin_l": shin_l_val,
-		"leg_r": leg_r_val,
-		"shin_r": shin_r_val,
+	# Keyframe poses
+	var windup_pose = {
+		"abdomen": Vector3(0, 48, -38),
+		"torso": Vector3(3, -1, -1),
+		"head": Vector3(0, -4, -1),
+		"arm_l": Vector3(-54, 6, 73), "forearm_l": Vector3(-4, 92, 51),
+		"arm_r": Vector3(-62, -12, -73), "forearm_r": Vector3(-12, -66, 0),
+		"leg_l": Vector3(-107, -27, -10), "shin_l": Vector3(72, 46, -6),
+		"foot_l": Vector3(26, 8, 19),
+		"leg_r": Vector3(-36, -3, 0), "shin_r": Vector3(34, 0, 0),
 		"foot_r": Vector3(-1, 0, 0),
 	}
-	# Slight height offset during peak
-	var height_offset = 0.0
-	if peak > 0.01 and spin2 < 0.99:
-		var peak_height = sin(clampf((progress - 0.15) / 0.65, 0.0, 1.0) * PI)
-		height_offset = peak_height * 0.09
-	_set_pose(pose, Vector3(0, height_offset, 0))
+	var impact_pose = {
+		"abdomen": Vector3(2, 50, -61),
+		"torso": Vector3(3, -2, -1),
+		"head": Vector3(0, -4, -1),
+		"arm_l": Vector3(-54, 6, 73), "forearm_l": Vector3(-4, 92, 51),
+		"arm_r": Vector3(-62, -12, -73), "forearm_r": Vector3(-12, -66, 0),
+		"leg_l": Vector3(-125, -14, 9), "shin_l": Vector3(6, 60, -9),
+		"foot_l": Vector3(46, 8, 19),
+		"leg_r": Vector3(-36, 45, 0), "shin_r": Vector3(34, 0, 0),
+		"foot_r": Vector3(-1, 0, 0),
+	}
+	var recovery1_pose = {
+		"abdomen": Vector3(32, 48, -56),
+		"torso": Vector3(3, -3, -2),
+		"head": Vector3(0, -4, -1),
+		"arm_l": Vector3(-54, 6, 73), "forearm_l": Vector3(-4, 92, 51),
+		"arm_r": Vector3(-62, -12, -73), "forearm_r": Vector3(-12, -66, 0),
+		"leg_l": Vector3(-71, -22, 59), "shin_l": Vector3(73, 60, -9),
+		"foot_l": Vector3(46, 8, 19),
+		"leg_r": Vector3(-36, 45, 0), "shin_r": Vector3(34, 0, 0),
+		"foot_r": Vector3(-1, 0, 0),
+	}
+	var recovery2_pose = {
+		"torso": Vector3(2, 0, 0),
+		"head": Vector3(0, -1, -1),
+		"arm_l": Vector3(-11, 20, 73), "forearm_l": Vector3(-10, 79, -1),
+		"arm_r": Vector3(-54, -32, -73), "forearm_r": Vector3(6, -66, 0),
+		"leg_l": Vector3(21, 0, 0), "shin_l": Vector3(34, 13, -6),
+		"leg_r": Vector3(-39, -1, 0), "shin_r": Vector3(34, 0, 0),
+		"foot_r": Vector3(-1, 0, 0),
+	}
+
+	var pose: Dictionary
+	var root_offset = Vector3.ZERO
+
+	if progress < 0.25:
+		# Stance → Windup
+		var t = sin(clampf(progress / 0.25, 0.0, 1.0) * PI * 0.5)
+		pose = _lerp_poses(stance, windup_pose, t)
+		root_offset = Vector3.ZERO.lerp(Vector3(1, 0, -1) * 0.01, t)
+	elif progress < 0.45:
+		# Windup → Impact
+		var t = sin(clampf((progress - 0.25) / 0.2, 0.0, 1.0) * PI * 0.5)
+		pose = _lerp_poses(windup_pose, impact_pose, t)
+		root_offset = Vector3(1, 0, -1).lerp(Vector3(0, 12, 2), t) * 0.01
+	elif progress < 0.7:
+		# Impact → Recovery1
+		var t = sin(clampf((progress - 0.45) / 0.25, 0.0, 1.0) * PI * 0.5)
+		pose = _lerp_poses(impact_pose, recovery1_pose, t)
+		root_offset = Vector3(0, 12, 2).lerp(Vector3(0, 42, 2), t) * 0.01
+	else:
+		# Recovery1 → Recovery2 → Stance
+		var t = sin(clampf((progress - 0.7) / 0.3, 0.0, 1.0) * PI * 0.5)
+		pose = _lerp_poses(recovery1_pose, recovery2_pose, t)
+		root_offset = Vector3(0, 42, 2).lerp(Vector3.ZERO, t) * 0.01
+
+	_set_pose(pose, root_offset)
 
 
 func set_pose_d_low_kick(progress: float) -> void:

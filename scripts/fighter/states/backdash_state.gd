@@ -5,14 +5,14 @@ extends FighterState
 # Korean Backdash Cancel (KBD): cancel recovery into another backdash
 # Input: b,b -> during recovery, b,n,b (or d/b,b) to cancel into new backdash
 
-const DASH_SPEED: float = 8.5  # Fast burst
-const DASH_DURATION: int = 24  # Shorter total
-const ACTIVE_FRAMES: int = 8   # Quick burst then recovery
-const KBD_WINDOW_START: int = 10  # Earliest frame to cancel with d/b
-const KBD_WINDOW_END: int = 18  # Latest frame to cancel — miss this and you eat full recovery
-const RECOVERY_START: int = 10  # Recovery begins here
+const DASH_SPEED: float = 6.0  # Slower than forward dash — retreat should lose ground
+const DASH_DURATION: int = 28  # Longer recovery — more punishable on whiff
+const ACTIVE_FRAMES: int = 7   # Quick burst then recovery
+const KBD_WINDOW_START: int = 12  # Earliest frame to cancel with d/b
+const KBD_WINDOW_END: int = 20  # Latest frame to cancel — miss this and you eat full recovery
+const RECOVERY_START: int = 12  # Recovery begins here
 const INVULN_START: int = 3    # Invulnerability begins
-const INVULN_END: int = 8      # Invulnerability ends
+const INVULN_END: int = 6      # Shorter i-frames — can't dodge everything for free
 
 var frame_counter: int = 0
 var saw_down_alone: bool = false  # d without back = backsway path

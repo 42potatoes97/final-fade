@@ -26,6 +26,10 @@ NetworkManager="*res://scripts/autoload/network_manager.gd"
 RollbackManager="*res://scripts/autoload/rollback_manager.gd"
 ProfileManager="*res://scripts/autoload/profile_manager.gd"
 
+[debug]
+
+gdscript/warnings/unused_signal=0
+
 [display]
 
 window/size/viewport_width=1920
@@ -129,8 +133,3 @@ pause={
 3d_physics/layer_5="p2_hitbox"
 3d_physics/layer_6="p1_hurtbox"
 3d_physics/layer_7="p2_hurtbox"
-
-[debug]
-
-gdscript/warnings/return_value_discarded=0
-gdscript/warnings/unused_signal=0
