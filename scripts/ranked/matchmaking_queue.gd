@@ -9,12 +9,26 @@ signal match_found(opponent: Dictionary)
 signal queue_status_changed(status: String)
 
 const QUEUE_TOPIC: String = "finalfade/ranked/queue"
+const MATCH_TOPIC_PREFIX: String = "finalfade/ranked/match/"
 const RATING_RANGE_INITIAL: int = 100
 const RATING_RANGE_EXPANSION: float = 50.0
 const RATING_RANGE_MAX: int = 500
 const ANNOUNCE_INTERVAL: float = 5.0
 const ENTRY_TIMEOUT: float = 60.0
 const MAX_CANDIDATES: int = 200
+
+# Region proximity — closer regions are preferred
+# Index = priority (lower = closer). Matching region = 0, adjacent = 1, etc.
+const REGION_PROXIMITY: Dictionary = {
+	"NA":  ["NA", "SA", "EUW", "EUE", "AS", "OC"],
+	"SA":  ["SA", "NA", "EUW", "EUE", "OC", "AS"],
+	"EUW": ["EUW", "EUE", "NA", "SA", "AS", "OC"],
+	"EUE": ["EUE", "EUW", "AS", "NA", "SA", "OC"],
+	"AS":  ["AS", "EUE", "OC", "EUW", "NA", "SA"],
+	"OC":  ["OC", "AS", "SA", "EUE", "EUW", "NA"],
+}
+# Max region distance allowed (expands over time: 0=same, 1=adjacent, etc.)
+const REGION_EXPAND_INTERVAL: float = 20.0  # Expand region every 20s
 
 var _signaling: SignalingClient
 var _candidates: Dictionary = {}
@@ -45,7 +59,7 @@ func join_queue(rating: int, region: String, transport: String) -> void:
 	}
 
 	# Sign the entry with the player's signing key
-	var signing_key: PackedByteArray = pm.get_signing_key() if pm and pm.has_method("get_signing_key") else PackedByteArray()
+	var signing_key: PackedByteArray = pm.signing_key if pm else PackedByteArray()
 	if signing_key.size() > 0:
 		var canonical: String = MatchProof._sorted_json(_local_entry)
 		var sig: PackedByteArray = CryptoUtils.hmac_sha256(signing_key, canonical.to_utf8_buffer())
@@ -91,7 +105,7 @@ func tick(delta: float) -> void:
 		_local_entry["timestamp"] = Time.get_unix_time_from_system()
 		# Re-sign with updated timestamp
 		var pm = Engine.get_main_loop().root.get_node_or_null("ProfileManager")
-		var signing_key: PackedByteArray = pm.get_signing_key() if pm and pm.has_method("get_signing_key") else PackedByteArray()
+		var signing_key: PackedByteArray = pm.signing_key if pm else PackedByteArray()
 		if signing_key.size() > 0:
 			var entry_no_sig: Dictionary = _local_entry.duplicate()
 			entry_no_sig.erase("signature")
@@ -114,6 +128,15 @@ func _evaluate_candidates() -> void:
 	var local_pid: String = _local_entry.get("profile_id", "")
 	var local_rating: int = _local_entry.get("rating", 0)
 	var local_transport: String = _local_entry.get("transport", "")
+	var local_region: String = _local_entry.get("region", "NA")
+
+	# Max allowed region distance (expands over time)
+	var max_region_dist: int = int(_queue_time / REGION_EXPAND_INTERVAL)
+
+	# Find best candidate: closest region first, then closest rating
+	var best_pid: String = ""
+	var best_region_dist: int = 999
+	var best_rating_diff: int = 999999
 
 	for pid in _candidates:
 		if pid == local_pid:
@@ -121,6 +144,7 @@ func _evaluate_candidates() -> void:
 
 		var candidate: Dictionary = _candidates[pid]
 		var candidate_rating: int = int(candidate.get("rating", 0))
+		var candidate_region: String = candidate.get("region", "")
 
 		# Rating must be within current expanding range
 		if absi(candidate_rating - local_rating) > _current_range:
@@ -130,21 +154,89 @@ func _evaluate_candidates() -> void:
 		if candidate.get("transport", "") != local_transport:
 			continue
 
-		# Deterministic host selection: lower profile_id hosts
-		var is_host: bool = local_pid < pid
+		# Region proximity check
+		var region_dist: int = _get_region_distance(local_region, candidate_region)
+		if region_dist > max_region_dist:
+			continue
 
-		var opponent: Dictionary = {
-			"profile_id": pid,
-			"username": candidate.get("username", ""),
-			"rating": candidate_rating,
-			"region": candidate.get("region", ""),
-			"transport": candidate.get("transport", ""),
-			"is_host": is_host,
-		}
+		# Score: prefer closer region, then closer rating
+		var rating_diff: int = absi(candidate_rating - local_rating)
+		if region_dist < best_region_dist or (region_dist == best_region_dist and rating_diff < best_rating_diff):
+			best_pid = pid
+			best_region_dist = region_dist
+			best_rating_diff = rating_diff
 
-		match_found.emit(opponent)
-		leave_queue()
+	if best_pid.is_empty():
 		return
+
+	var candidate: Dictionary = _candidates[best_pid]
+
+	# Deterministic host selection: lower profile_id hosts
+	var is_host: bool = local_pid < best_pid
+
+	var opponent: Dictionary = {
+		"profile_id": best_pid,
+		"username": candidate.get("username", ""),
+		"rating": int(candidate.get("rating", 0)),
+		"region": candidate.get("region", ""),
+		"transport": candidate.get("transport", ""),
+		"is_host": is_host,
+	}
+
+	print("[Ranked] Match found! vs %s (rating %d, region %s, host=%s)" % [
+		opponent["username"], opponent["rating"], opponent["region"], str(is_host)])
+
+	# Start post-match room code exchange
+	_initiate_match_connection(opponent)
+	leave_queue()
+
+
+func _get_region_distance(region_a: String, region_b: String) -> int:
+	if region_a == region_b:
+		return 0
+	var priority_list: Array = REGION_PROXIMITY.get(region_a, [])
+	var idx: int = priority_list.find(region_b)
+	return idx if idx >= 0 else 99
+
+
+func _initiate_match_connection(opponent: Dictionary) -> void:
+	# Create a deterministic per-match topic from both profile IDs
+	var local_pid: String = _local_entry.get("profile_id", "")
+	var opp_pid: String = opponent["profile_id"]
+	var sorted_pids: Array = [local_pid, opp_pid]
+	sorted_pids.sort()
+	var match_topic: String = MATCH_TOPIC_PREFIX + sorted_pids[0].left(8) + "_" + sorted_pids[1].left(8)
+
+	if opponent["is_host"]:
+		# We are the host — create a WebRTC room and publish the code
+		NetworkManager.active_transport = "webrtc"
+		NetworkManager.host_game()
+		# Wait for room code, then publish to match topic
+		NetworkManager.room_code_ready.connect(
+			func(code: String):
+				var payload: Dictionary = {"room_code": code, "host_pid": local_pid}
+				_signaling.publish(match_topic, JSON.stringify(payload), true)
+				print("[Ranked] Room code published to %s" % match_topic)
+		, CONNECT_ONE_SHOT)
+	else:
+		# We are the joiner — subscribe to match topic and wait for room code
+		_signaling.subscribe(match_topic)
+		_signaling.message_received.connect(
+			func(topic: String, payload: String):
+				if topic != match_topic:
+					return
+				var parsed = JSON.parse_string(payload)
+				if parsed == null or not parsed is Dictionary:
+					return
+				var code: String = parsed.get("room_code", "")
+				if code.is_empty():
+					return
+				print("[Ranked] Received room code from host: %s" % code)
+				NetworkManager.active_transport = "webrtc"
+				NetworkManager.join_with_code(code)
+		, CONNECT_ONE_SHOT)
+
+	match_found.emit(opponent)
 
 
 func _cleanup_stale() -> void:

@@ -5,6 +5,7 @@ extends RefCounted
 # Publishes and discovers available rooms via shared MQTT topic
 
 signal room_added(room: Dictionary)
+signal room_updated(room: Dictionary)
 signal room_removed(room_id: String)
 signal lobby_connected
 signal lobby_disconnected
@@ -176,6 +177,8 @@ func _on_message(topic: String, payload: String) -> void:
 
 	if is_new:
 		room_added.emit(clean_room)
+	else:
+		room_updated.emit(clean_room)
 
 
 func _cleanup_stale() -> void:

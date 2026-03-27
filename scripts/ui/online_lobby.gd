@@ -661,6 +661,8 @@ func _on_lobby_connect_pressed() -> void:
 
 	if not _lobby.room_added.is_connected(_on_room_added):
 		_lobby.room_added.connect(_on_room_added)
+	if not _lobby.room_updated.is_connected(_on_room_updated):
+		_lobby.room_updated.connect(_on_room_updated)
 	if not _lobby.room_removed.is_connected(_on_room_removed):
 		_lobby.room_removed.connect(_on_room_removed)
 	if not _lobby.lobby_connected.is_connected(_on_lobby_connected):
@@ -776,6 +778,18 @@ func _on_room_added(room: Dictionary) -> void:
 	room_list_container.add_child(row)
 	_room_rows[rid] = row
 	_update_lobby_status()
+
+
+func _on_room_updated(room: Dictionary) -> void:
+	var rid: String = room.get("room_id", "")
+	if not _room_rows.has(rid):
+		return
+	var status: String = room.get("status", "waiting")
+	# Remove full or closed rooms from the list
+	if status == "full" or status == "closed":
+		_room_rows[rid].queue_free()
+		_room_rows.erase(rid)
+		_update_lobby_status()
 
 
 func _on_room_removed(room_id: String) -> void:
@@ -952,7 +966,8 @@ func _on_ranked_find_pressed():
 
 	var rating = _get_local_rating()
 	var region = ranked_region_btn.get_item_text(ranked_region_btn.selected)
-	_matchmaking.join_queue(rating, region, NetworkManager.active_transport)
+	# Ranked always uses WebRTC for internet play
+	_matchmaking.join_queue(rating, region, "webrtc")
 	ranked_find_btn.visible = false
 	ranked_cancel_btn.visible = true
 
@@ -966,7 +981,10 @@ func _on_ranked_cancel_pressed():
 
 
 func _on_ranked_match_found(opponent: Dictionary):
-	ranked_status_label.text = "Match found: " + opponent.get("username", "Unknown")
+	var opp_name: String = opponent.get("username", "Unknown")
+	var opp_rating: int = opponent.get("rating", 0)
+	var is_host: bool = opponent.get("is_host", false)
+
 	ranked_find_btn.visible = false
 	ranked_cancel_btn.visible = false
 
@@ -975,16 +993,26 @@ func _on_ranked_match_found(opponent: Dictionary):
 	GameManager.ai_mode = false
 	GameManager.training_mode = false
 
-	# Deterministic host: the queue already determined who hosts
-	var is_host: bool = opponent.get("is_host", false) == false  # If opponent is NOT host, we are
 	if is_host:
-		# We host — create room, announce code via MQTT for opponent to join
-		NetworkManager.host_game()
-		ranked_status_label.text = "Hosting... waiting for opponent to connect"
+		ranked_status_label.text = "Match found: %s (%d) — Hosting..." % [opp_name, opp_rating]
 	else:
-		# Opponent hosts — wait for their room code announcement
-		ranked_status_label.text = "Waiting for host's room code..."
-		# The matchmaking queue will publish the room code exchange on a per-match topic
+		ranked_status_label.text = "Match found: %s (%d) — Connecting..." % [opp_name, opp_rating]
+
+	# Connection is handled by matchmaking_queue._initiate_match_connection()
+	# Listen for peer connection to transition to game
+	if not NetworkManager.connected_to_peer.is_connected(_on_ranked_connected):
+		NetworkManager.connected_to_peer.connect(_on_ranked_connected, CONNECT_ONE_SHOT)
+
+
+func _on_ranked_connected():
+	ranked_status_label.text = "Connected! Starting match..."
+	ranked_status_label.add_theme_color_override("font_color", Color(0.2, 1.0, 0.3))
+	# Brief delay then start match
+	get_tree().create_timer(1.0).timeout.connect(func():
+		NetworkManager.start_game()
+		NetworkManager.notify_game_start()
+		get_tree().change_scene_to_file("res://scenes/ui/side_select.tscn")
+	)
 
 
 func _on_ranked_status_changed(status: String):
@@ -1092,6 +1120,9 @@ func _on_join_pressed() -> void:
 
 
 func _on_cancel_connection() -> void:
+	# Remove room from lobby if we were hosting
+	if _lobby and _state == LobbyState.HOSTING:
+		_lobby.remove_room()
 	NetworkManager.disconnect_peer()
 	status_label.text = "Cancelled."
 	status_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.7))
@@ -1162,6 +1193,10 @@ func _on_connected() -> void:
 	_set_connection_state(LobbyState.CONNECTED)
 	if NetworkManager.is_host:
 		start_btn.visible = true
+		# Update lobby to show room is full
+		if _lobby and not _lobby._hosting_room.is_empty():
+			_lobby._hosting_room["status"] = "full"
+			_lobby.announce_room(_lobby._hosting_room)
 	else:
 		status_label.text = "Connected! Waiting for host to start..."
 
@@ -1207,6 +1242,9 @@ func _on_back_pressed() -> void:
 	if _state != LobbyState.IDLE:
 		_on_cancel_connection()
 		return
+	# Remove room from lobby before leaving
+	if _lobby:
+		_lobby.remove_room()
 	NetworkManager.disconnect_peer()
 	get_tree().change_scene_to_file("res://scenes/ui/main_menu.tscn")
 
