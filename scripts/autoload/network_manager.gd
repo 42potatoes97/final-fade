@@ -199,6 +199,9 @@ func disconnect_peer() -> void:
 	_session_key = PackedByteArray()
 	_packet_key = PackedByteArray()
 	_auth_pending = false
+	# Reset WebRTC transport for next match
+	if _webrtc_transport != null:
+		_webrtc_transport.reset()
 	# Remove lobby listing
 	if _lobby:
 		_lobby.remove_room()
@@ -270,7 +273,8 @@ func announce_to_lobby(room_code: String) -> void:
 		"host_name": pm.username if pm else "Unknown",
 		"transport": active_transport,
 		"region": "",
-		"delay": input_delay,
+		"input_delay": input_delay,
+		"status": "waiting",
 	})
 
 

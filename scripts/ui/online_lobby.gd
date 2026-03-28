@@ -107,6 +107,9 @@ func _ready() -> void:
 	_ranked_config = RankedConfig.new()
 	_ranked_config.load_config()
 
+	# Auto-connect to lobby so active rooms are visible immediately
+	call_deferred("_auto_connect_lobby")
+
 
 # =============================================================================
 #  UI CONSTRUCTION
@@ -664,6 +667,11 @@ func _build_lobbies_panel() -> VBoxContainer:
 	return panel
 
 
+func _auto_connect_lobby() -> void:
+	# Silently connect to lobby broker and start browsing
+	_on_lobby_connect_pressed()
+
+
 func _on_lobby_connect_pressed() -> void:
 	lobby_status_label.text = "Connecting to lobby..."
 	lobby_status_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.3))
@@ -935,11 +943,13 @@ func _on_broker_connected_for_quick():
 
 
 func _start_quick_matchmaking(signaling: SignalingClient):
-	if _matchmaking == null:
-		_matchmaking = MatchmakingQueue.new()
-		_matchmaking.init(signaling)
-		_matchmaking.match_found.connect(_on_quick_match_found)
-		_matchmaking.queue_status_changed.connect(_on_quick_status_changed)
+	# Always create fresh queue to ensure correct signal wiring
+	if _matchmaking != null:
+		_matchmaking.leave_queue()
+	_matchmaking = MatchmakingQueue.new()
+	_matchmaking.init(signaling)
+	_matchmaking.match_found.connect(_on_quick_match_found)
+	_matchmaking.queue_status_changed.connect(_on_quick_status_changed)
 
 	var region: String = _auto_detect_region()
 	_matchmaking.join_quick_match(region, "webrtc")
@@ -1458,11 +1468,13 @@ func _on_broker_connected_for_ranked():
 
 
 func _start_ranked_matchmaking(signaling: SignalingClient):
-	if _matchmaking == null:
-		_matchmaking = MatchmakingQueue.new()
-		_matchmaking.init(signaling)
-		_matchmaking.match_found.connect(_on_ranked_match_found)
-		_matchmaking.queue_status_changed.connect(_on_ranked_status_changed)
+	# Always create fresh queue to ensure correct signal wiring
+	if _matchmaking != null:
+		_matchmaking.leave_queue()
+	_matchmaking = MatchmakingQueue.new()
+	_matchmaking.init(signaling)
+	_matchmaking.match_found.connect(_on_ranked_match_found)
+	_matchmaking.queue_status_changed.connect(_on_ranked_status_changed)
 
 	var rating = _get_local_rating()
 	var region: String = _auto_detect_region()
@@ -1624,6 +1636,8 @@ func _on_join_pressed() -> void:
 
 
 func _on_cancel_connection() -> void:
+	# Clean up match dialog if open (prevents leaked signal handlers)
+	_close_match_dialog()
 	# Remove room from lobby if we were hosting
 	if _lobby and _state == LobbyState.HOSTING:
 		_lobby.remove_room()

@@ -194,6 +194,17 @@ func _republish_ice_candidates() -> void:
 		signaling.publish(ice_topic, payload)
 
 
+func reset() -> void:
+	# Clear state so a new host/client can be created for a fresh match
+	if rtc_peer:
+		rtc_peer = null
+	rtc_multiplayer = null
+	room_id = ""
+	is_host = false
+	_cached_offer_payload = ""
+	_cached_ice.clear()
+
+
 # --- Utility ---
 
 func _generate_room_id() -> String:

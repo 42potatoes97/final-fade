@@ -10,7 +10,8 @@ signal room_removed(room_id: String)
 signal lobby_connected
 signal lobby_disconnected
 
-const LOBBY_TOPIC: String = "finalfade/lobby/rooms"
+const LOBBY_TOPIC_BASE: String = "finalfade/lobby/rooms"
+const LOBBY_TOPIC_WILDCARD: String = "finalfade/lobby/rooms/+"
 const HEARTBEAT_INTERVAL: float = 5.0   # Re-announce every 5s so new subscribers see us quickly
 const STALE_TIMEOUT: float = 15.0       # Remove rooms not seen in 15s
 
@@ -28,7 +29,7 @@ func init(signaling: SignalingClient) -> void:
 
 
 func start_browsing() -> void:
-	_signaling.subscribe(LOBBY_TOPIC)
+	_signaling.subscribe(LOBBY_TOPIC_WILDCARD)
 
 
 func stop_browsing() -> void:
@@ -52,18 +53,24 @@ func announce_room(room: Dictionary) -> void:
 		room["signature"] = Marshalls.raw_to_base64(Crypto.new().generate_random_bytes(32))
 	_hosting_room = room
 	var payload := JSON.stringify(room)
-	# Publish with retain so new subscribers see existing rooms
-	_signaling.publish(LOBBY_TOPIC, payload, true)
-	print("[Lobby] Room announced (retained): %s" % room.get("room_id", "?"))
+	# Publish to per-room subtopic with retain so new subscribers see existing rooms
+	var rid: String = room.get("room_id", "unknown")
+	var room_topic: String = LOBBY_TOPIC_BASE + "/" + rid
+	_signaling.publish(room_topic, payload, true)
+	print("[Lobby] Room announced (retained): %s" % rid)
 
 
 func remove_room() -> void:
 	if _hosting_room.is_empty():
 		return
+	var rid: String = _hosting_room.get("room_id", "unknown")
+	var room_topic: String = LOBBY_TOPIC_BASE + "/" + rid
+	# Publish closed status
 	_hosting_room["status"] = "closed"
 	_hosting_room["timestamp"] = _get_unix_time()
-	var payload := JSON.stringify(_hosting_room)
-	_signaling.publish(LOBBY_TOPIC, payload)
+	_signaling.publish(room_topic, JSON.stringify(_hosting_room))
+	# Clear the retained message so new subscribers don't see a dead room
+	_signaling.publish(room_topic, "", true)
 	_hosting_room = {}
 
 
@@ -82,7 +89,7 @@ func tick(delta: float) -> void:
 # --- Message Handling ---
 
 func _on_message(topic: String, payload: String) -> void:
-	if topic != LOBBY_TOPIC:
+	if not topic.begins_with(LOBBY_TOPIC_BASE):
 		return
 
 	var parsed = JSON.parse_string(payload)
