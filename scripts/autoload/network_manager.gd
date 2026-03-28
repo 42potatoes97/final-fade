@@ -215,32 +215,21 @@ func notify_game_start() -> void:
 	_rpc_sync_start.rpc()
 
 
-# --- Input Exchange with CRC32 ---
+# --- Input Exchange via RPC (unreliable_ordered for low latency) ---
 
 func send_input(frame: int, input_bits: int) -> void:
 	_sent_inputs[frame] = input_bits
 
+	# Build redundancy: pack last N frames as a flat array [f0, i0, f1, i1, ...]
 	var count: int = mini(INPUT_REDUNDANCY, _sent_inputs.size())
-	var total_size: int = 5 + count * 5
-	var data: PackedByteArray = PackedByteArray()
-	data.resize(total_size)
-	data.encode_u32(0, frame)
-	data[4] = count
-
+	var redundant: Array = []
 	for i in range(count):
 		var f: int = frame - count + 1 + i
-		var offset: int = 5 + i * 5
-		data.encode_u32(offset, f)
-		data[offset + 4] = _sent_inputs.get(f, 0)
-
-	# Append HMAC for authenticated integrity (or CRC32 fallback if no key yet)
-	if _packet_key.size() > 0:
-		data = CryptoUtils.sign_packet(data, _packet_key)
-	else:
-		data = CryptoUtils.append_crc32(data)
+		redundant.append(f)
+		redundant.append(_sent_inputs.get(f, 0))
 
 	if remote_peer_id > 0:
-		multiplayer.multiplayer_peer.put_packet(data)
+		_rpc_input.rpc_id(remote_peer_id, frame, input_bits, redundant)
 
 	# Prune old inputs
 	var cutoff: int = frame - INPUT_REDUNDANCY
@@ -250,6 +239,19 @@ func send_input(frame: int, input_bits: int) -> void:
 			to_erase.append(f)
 	for f in to_erase:
 		_sent_inputs.erase(f)
+
+
+@rpc("any_peer", "unreliable_ordered")
+func _rpc_input(frame: int, input_bits: int, redundant: Array) -> void:
+	# Process redundant frames first (older frames we may have missed)
+	var i: int = 0
+	while i + 1 < redundant.size():
+		var rf: int = int(redundant[i])
+		var ri: int = int(redundant[i + 1])
+		remote_input_received.emit(rf, ri)
+		i += 2
+	# Process the current frame
+	remote_input_received.emit(frame, input_bits)
 
 
 # --- Room Code (Encrypted) ---
@@ -379,6 +381,25 @@ func _rpc_rematch_request() -> void:
 	pass
 
 
+# --- Menu Sync (side select, char select, stage select) ---
+
+signal menu_sync_received(data: Dictionary)
+
+func send_menu_sync(data: Dictionary) -> void:
+	if remote_peer_id > 0:
+		var bytes: PackedByteArray = JSON.stringify(data).to_utf8_buffer()
+		_rpc_menu_sync.rpc_id(remote_peer_id, bytes)
+		print("[MenuSync] Sent: %s" % str(data))
+
+
+@rpc("any_peer", "reliable")
+func _rpc_menu_sync(json_bytes: PackedByteArray) -> void:
+	var parsed = JSON.parse_string(json_bytes.get_string_from_utf8())
+	if parsed is Dictionary:
+		print("[MenuSync] Received: %s" % str(parsed))
+		menu_sync_received.emit(parsed)
+
+
 @rpc("any_peer", "unreliable")
 func _rpc_state_hash(hash_data: PackedByteArray) -> void:
 	if _anticheat_ref == null:
@@ -440,6 +461,10 @@ func _on_multiplayer_peer_connected(id: int) -> void:
 
 func _on_multiplayer_peer_disconnected(id: int) -> void:
 	print("[NetworkManager] Multiplayer peer disconnected! id=%d" % id)
+	# During IN_GAME, don't reset — WebRTC may reconnect via ICE restart
+	if connection_state == ConnectionState.IN_GAME:
+		print("[NetworkManager] Peer lost during game — keeping state for reconnection")
+		return
 	disconnected.emit()
 
 
@@ -541,7 +566,8 @@ func _process(delta: float) -> void:
 	if multiplayer.multiplayer_peer == null:
 		return
 
-	_poll_packets()
+	# Input exchange now uses RPC (_rpc_input) so no raw packet polling needed.
+	# _poll_packets() is only used during auth handshake (above).
 
 	# Periodic ping (handled by RollbackManager during gameplay)
 

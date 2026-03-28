@@ -55,6 +55,11 @@ var result_label: Label
 var countdown_timer: float = -1.0
 var chosen_stage: int = -1
 
+# Online sync
+var _online_local_stage_ready: bool = false
+var _online_opp_stage_ready: bool = false
+var _online_opp_stage_pick: int = -1
+
 
 func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -68,6 +73,13 @@ func _ready() -> void:
 		p2_selected = randi() % STAGES.size()
 		p2_confirmed = true
 		_update_display()
+
+	# Online mode: sync stage picks via RPC
+	if GameManager.online_mode:
+		_online_local_stage_ready = false
+		_online_opp_stage_ready = false
+		_online_opp_stage_pick = -1
+		NetworkManager.menu_sync_received.connect(_on_stage_menu_sync)
 
 
 func _build_ui() -> void:
@@ -251,6 +263,14 @@ func _input(event: InputEvent) -> void:
 	if not event.is_pressed():
 		return
 
+	# Online mode: all local input goes to the local player's side
+	if GameManager.online_mode:
+		var local_player: int = GameManager.local_side
+		var is_confirmed: bool = (p1_confirmed if local_player == 1 else p2_confirmed)
+		if not is_confirmed:
+			_handle_player_input(event, local_player)
+		return
+
 	# Determine which player this event belongs to
 	if event is InputEventJoypadButton or event is InputEventJoypadMotion:
 		var dev_id = event.device
@@ -278,7 +298,12 @@ func _handle_player_input(event: InputEvent, player: int) -> void:
 	var confirm = false
 
 	if event is InputEventKey and event.pressed:
-		if player == 1:
+		if GameManager.online_mode:
+			# Online: accept both WASD and arrow keys for the local player
+			nav_left = event.keycode == KEY_A or event.keycode == KEY_LEFT
+			nav_right = event.keycode == KEY_D or event.keycode == KEY_RIGHT
+			confirm = event.keycode == KEY_J or event.keycode == KEY_U or event.keycode == KEY_KP_1 or event.keycode == KEY_ENTER or event.keycode == KEY_SPACE
+		elif player == 1:
 			nav_left = event.keycode == KEY_A
 			nav_right = event.keycode == KEY_D
 			confirm = event.keycode == KEY_J  # Attack 1
@@ -324,6 +349,25 @@ func _handle_player_input(event: InputEvent, player: int) -> void:
 
 
 func _check_both_confirmed() -> void:
+	if GameManager.online_mode:
+		# Online: send our pick, wait for opponent
+		var local_side: int = GameManager.local_side
+		var local_pick: int = p1_selected if local_side == 1 else p2_selected
+		var is_confirmed: bool = p1_confirmed if local_side == 1 else p2_confirmed
+		if is_confirmed and not _online_local_stage_ready:
+			_online_local_stage_ready = true
+			NetworkManager.send_menu_sync({
+				"screen": "stage_select",
+				"ready": true,
+				"stage_pick": local_pick,
+			})
+			if _online_opp_stage_ready:
+				_resolve_online_stage(local_pick)
+			else:
+				result_label.text = "Waiting for opponent..."
+				result_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.3))
+		return
+
 	if not p1_confirmed or not p2_confirmed:
 		return
 
@@ -338,6 +382,34 @@ func _check_both_confirmed() -> void:
 		result_label.text = STAGES[chosen_stage].name + " selected!"
 
 	countdown_timer = 1.5  # Brief pause before fight
+
+
+func _on_stage_menu_sync(data: Dictionary) -> void:
+	if data.get("screen", "") != "stage_select":
+		return
+	_online_opp_stage_ready = data.get("ready", false)
+	_online_opp_stage_pick = int(data.get("stage_pick", 0))
+	if _online_opp_stage_ready and _online_local_stage_ready:
+		var local_pick: int = p1_selected if GameManager.local_side == 1 else p2_selected
+		_resolve_online_stage(local_pick)
+	elif _online_opp_stage_ready and not _online_local_stage_ready:
+		result_label.text = "Opponent ready — pick your stage!"
+		result_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.3))
+
+
+func _resolve_online_stage(local_pick: int) -> void:
+	# Deterministic resolution: host's pick wins ties, else use lower-PID's pick
+	if local_pick == _online_opp_stage_pick:
+		chosen_stage = local_pick
+	else:
+		# Host (local_player_id was 1 before side remap) gets priority
+		if NetworkManager.is_host:
+			chosen_stage = local_pick
+		else:
+			chosen_stage = _online_opp_stage_pick
+	result_label.text = STAGES[chosen_stage].name + " selected!"
+	result_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
+	countdown_timer = 1.5
 
 
 func _start_fight() -> void:

@@ -873,23 +873,13 @@ func _build_quick_panel() -> VBoxContainer:
 	desc_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	panel.add_child(desc_lbl)
 
-	# Region selector
-	var region_hbox: HBoxContainer = HBoxContainer.new()
-	region_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	region_hbox.add_theme_constant_override("separation", 10)
-	panel.add_child(region_hbox)
-
+	# Auto-detected region display
 	var region_lbl: Label = Label.new()
-	region_lbl.text = "Region:"
-	region_lbl.add_theme_font_size_override("font_size", 18)
-	region_hbox.add_child(region_lbl)
-
-	quick_region_btn = OptionButton.new()
-	quick_region_btn.custom_minimum_size = Vector2(120, 40)
-	quick_region_btn.add_theme_font_size_override("font_size", 18)
-	for r in MatchmakingQueue.REGIONS:
-		quick_region_btn.add_item(r)
-	region_hbox.add_child(quick_region_btn)
+	region_lbl.text = "Region: %s (auto-detected)" % _auto_detect_region()
+	region_lbl.add_theme_font_size_override("font_size", 16)
+	region_lbl.add_theme_color_override("font_color", Color(0.5, 0.6, 0.5))
+	region_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	panel.add_child(region_lbl)
 
 	# Find / Cancel buttons
 	var btn_hbox: HBoxContainer = HBoxContainer.new()
@@ -926,21 +916,71 @@ func _build_quick_panel() -> VBoxContainer:
 
 func _on_quick_find_pressed():
 	var signaling: SignalingClient = NetworkManager.get_signaling()
+	quick_find_btn.visible = false
+	quick_cancel_btn.visible = true
+
 	if not signaling.is_connected_to_broker():
 		signaling.connect_to_broker()
+		quick_status_label.text = "Connecting to server..."
+		quick_status_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.7))
+		# Wait for connection, then start matchmaking
+		signaling.connected.connect(_on_broker_connected_for_quick, CONNECT_ONE_SHOT)
+	else:
+		_start_quick_matchmaking(signaling)
 
+
+func _on_broker_connected_for_quick():
+	var signaling: SignalingClient = NetworkManager.get_signaling()
+	_start_quick_matchmaking(signaling)
+
+
+func _start_quick_matchmaking(signaling: SignalingClient):
 	if _matchmaking == null:
 		_matchmaking = MatchmakingQueue.new()
 		_matchmaking.init(signaling)
 		_matchmaking.match_found.connect(_on_quick_match_found)
 		_matchmaking.queue_status_changed.connect(_on_quick_status_changed)
 
-	var region: String = quick_region_btn.get_item_text(quick_region_btn.selected)
+	var region: String = _auto_detect_region()
 	_matchmaking.join_quick_match(region, "webrtc")
-	quick_find_btn.visible = false
-	quick_cancel_btn.visible = true
-	quick_status_label.text = "Searching..."
+	quick_status_label.text = "Searching... [%s]" % region
 	quick_status_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.3))
+
+
+func _auto_detect_region() -> String:
+	# Infer region from system UTC offset (hours)
+	var local = Time.get_datetime_dict_from_system()
+	var utc = Time.get_datetime_dict_from_system(true)
+	var offset_h: int = local.get("hour", 0) - utc.get("hour", 0)
+	# Handle day boundary wrap
+	if offset_h > 12:
+		offset_h -= 24
+	elif offset_h < -12:
+		offset_h += 24
+
+	# Map UTC offset to closest region
+	if offset_h >= -8 and offset_h <= -7:    # UTC-8/-7: US West (PST/MST)
+		return "USW"
+	elif offset_h >= -6 and offset_h <= -5:  # UTC-6/-5: US Central/East (CST/EST)
+		return "USC"
+	elif offset_h == -4:                      # UTC-4: US East
+		return "USE"
+	elif offset_h >= -5 and offset_h <= -3:  # UTC-3 to -5: South America
+		return "SA"
+	elif offset_h >= 0 and offset_h <= 1:    # UTC+0/+1: EU West (GMT/CET)
+		return "EUW"
+	elif offset_h >= 2 and offset_h <= 3:    # UTC+2/+3: EU East (EET/MSK)
+		return "EUE"
+	elif offset_h >= 4 and offset_h <= 5:    # UTC+4/+5: Asia West (GST/PKT)
+		return "AW"
+	elif offset_h >= 6 and offset_h <= 8:    # UTC+6 to +8: SE Asia (ICT/CST)
+		return "ASEA"
+	elif offset_h >= 9 and offset_h <= 10:   # UTC+9/+10: East Asia / Oceania (JST/AEST)
+		return "EA"
+	elif offset_h >= 11 and offset_h <= 12:  # UTC+11/+12: Oceania East (AEDT/NZST)
+		return "OCEE"
+	else:
+		return "USE"  # Fallback
 
 
 func _on_quick_cancel_pressed():
@@ -956,28 +996,342 @@ func _on_quick_status_changed(status: String):
 
 
 func _on_quick_match_found(opponent: Dictionary):
-	var opp_name: String = opponent.get("username", "Unknown")
-	quick_find_btn.visible = false
-	quick_cancel_btn.visible = false
-	quick_status_label.text = "Match found: %s — Connecting..." % opp_name
-	quick_status_label.add_theme_color_override("font_color", Color(0.2, 1.0, 0.3))
-
-	GameManager.online_mode = true
-	GameManager.ranked_mode = false
-	GameManager.ai_mode = false
-	GameManager.training_mode = false
-
-	if not NetworkManager.connected_to_peer.is_connected(_on_quick_connected):
-		NetworkManager.connected_to_peer.connect(_on_quick_connected, CONNECT_ONE_SHOT)
+	_show_match_found_dialog(opponent, false)
 
 
 func _on_quick_connected():
-	quick_status_label.text = "Connected! Starting match..."
+	_on_match_connected()
+
+
+# =============================================================================
+#  MATCH FOUND DIALOG (shared between Quick and Ranked)
+# =============================================================================
+
+var _match_dialog: Panel = null
+var _match_opponent: Dictionary = {}
+var _match_is_ranked: bool = false
+var _match_accept_topic: String = ""
+var _match_local_accepted: bool = false
+var _match_opp_accepted: bool = false
+var _match_accept_cb: Callable
+var _match_timer: float = 0.0
+var _match_timer_label: Label = null
+var _match_accept_btn: Button = null
+var _match_decline_btn: Button = null
+const MATCH_ACCEPT_TIMEOUT: float = 15.0
+
+
+func _show_match_found_dialog(opponent: Dictionary, is_ranked: bool) -> void:
+	_match_opponent = opponent
+	_match_is_ranked = is_ranked
+	_match_local_accepted = false
+	_match_opp_accepted = false
+	_match_timer = MATCH_ACCEPT_TIMEOUT
+
+	var opp_name: String = opponent.get("username", "Unknown")
+	var opp_region: String = opponent.get("region", "?")
+	var opp_rating: int = opponent.get("rating", 0)
+	var latency: int = opponent.get("latency", 0)
+	var local_region: String = _auto_detect_region()
+
+	# Build match accept topic
+	var pm = Engine.get_main_loop().root.get_node_or_null("ProfileManager")
+	var local_pid: String = pm.profile_id if pm else ""
+	var opp_pid: String = opponent.get("profile_id", "")
+	var sorted_pids: Array = [local_pid, opp_pid]
+	sorted_pids.sort()
+	_match_accept_topic = "finalfade/match/" + sorted_pids[0].left(16) + "_" + sorted_pids[1].left(16) + "/accept"
+
+	# Subscribe with wildcard to catch per-player accept subtopics
+	var signaling: SignalingClient = NetworkManager.get_signaling()
+	signaling.subscribe(_match_accept_topic + "/+")
+
+	# Listen for opponent's accept/decline
+	_match_accept_cb = func(topic: String, payload: String):
+		if not topic.begins_with(_match_accept_topic):
+			return
+		var parsed = JSON.parse_string(payload)
+		if parsed == null or not parsed is Dictionary:
+			return
+		var sender: String = parsed.get("pid", "")
+		if sender == local_pid:
+			return  # Own message
+		var action: String = parsed.get("action", "")
+		if action == "accept":
+			_match_opp_accepted = true
+			_check_both_accepted()
+		elif action == "decline":
+			_on_match_declined_by_opponent()
+	signaling.message_received.connect(_match_accept_cb)
+
+	# Build dialog overlay
+	if _match_dialog:
+		_match_dialog.queue_free()
+
+	_match_dialog = Panel.new()
+	_match_dialog.set_anchors_preset(Control.PRESET_FULL_RECT)
+	var style = StyleBoxFlat.new()
+	style.bg_color = Color(0.0, 0.0, 0.0, 0.85)
+	_match_dialog.add_theme_stylebox_override("panel", style)
+	add_child(_match_dialog)
+
+	var vbox = VBoxContainer.new()
+	vbox.set_anchors_preset(Control.PRESET_CENTER)
+	vbox.set_anchor_and_offset(SIDE_LEFT, 0.5, -200)
+	vbox.set_anchor_and_offset(SIDE_RIGHT, 0.5, 200)
+	vbox.set_anchor_and_offset(SIDE_TOP, 0.5, -160)
+	vbox.set_anchor_and_offset(SIDE_BOTTOM, 0.5, 160)
+	vbox.add_theme_constant_override("separation", 12)
+	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	_match_dialog.add_child(vbox)
+
+	# Title
+	var title = Label.new()
+	title.text = "MATCH FOUND!"
+	title.add_theme_font_size_override("font_size", 36)
+	title.add_theme_color_override("font_color", Color(1.0, 0.9, 0.2))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(title)
+
+	# Opponent name
+	var name_lbl = Label.new()
+	name_lbl.text = opp_name
+	name_lbl.add_theme_font_size_override("font_size", 28)
+	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(name_lbl)
+
+	# Rating (ranked only)
+	if is_ranked and opp_rating > 0:
+		var rating_lbl = Label.new()
+		rating_lbl.text = "Rating: %d" % opp_rating
+		rating_lbl.add_theme_font_size_override("font_size", 20)
+		rating_lbl.add_theme_color_override("font_color", Color(0.8, 0.8, 0.3))
+		rating_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		vbox.add_child(rating_lbl)
+
+	# Connection quality
+	var quality_lbl = Label.new()
+	var quality_text: String
+	var quality_color: Color
+	if latency == 0:
+		quality_text = "Connection: Excellent (same region)"
+		quality_color = Color(0.2, 1.0, 0.3)
+	elif latency <= 80:
+		quality_text = "Connection: Good (~%dms)" % latency
+		quality_color = Color(0.2, 1.0, 0.3)
+	elif latency <= 150:
+		quality_text = "Connection: Fair (~%dms)" % latency
+		quality_color = Color(1.0, 0.85, 0.2)
+	else:
+		quality_text = "Connection: Poor (~%dms)" % latency
+		quality_color = Color(1.0, 0.3, 0.2)
+	quality_lbl.text = quality_text
+	quality_lbl.add_theme_font_size_override("font_size", 18)
+	quality_lbl.add_theme_color_override("font_color", quality_color)
+	quality_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(quality_lbl)
+
+	# Region
+	var region_lbl = Label.new()
+	region_lbl.text = "%s → %s" % [local_region, opp_region]
+	region_lbl.add_theme_font_size_override("font_size", 16)
+	region_lbl.add_theme_color_override("font_color", Color(0.5, 0.5, 0.6))
+	region_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(region_lbl)
+
+	# Timer
+	_match_timer_label = Label.new()
+	_match_timer_label.text = "%ds" % int(_match_timer)
+	_match_timer_label.add_theme_font_size_override("font_size", 16)
+	_match_timer_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.7))
+	_match_timer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(_match_timer_label)
+
+	# Buttons
+	var btn_hbox = HBoxContainer.new()
+	btn_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	btn_hbox.add_theme_constant_override("separation", 30)
+	vbox.add_child(btn_hbox)
+
+	_match_accept_btn = Button.new()
+	_match_accept_btn.text = "ACCEPT"
+	_match_accept_btn.custom_minimum_size = Vector2(160, 50)
+	_match_accept_btn.add_theme_font_size_override("font_size", 24)
+	_match_accept_btn.add_theme_color_override("font_color", Color(0.2, 1.0, 0.3))
+	_match_accept_btn.pressed.connect(_on_match_accept)
+	btn_hbox.add_child(_match_accept_btn)
+
+	_match_decline_btn = Button.new()
+	_match_decline_btn.text = "DECLINE"
+	_match_decline_btn.custom_minimum_size = Vector2(160, 50)
+	_match_decline_btn.add_theme_font_size_override("font_size", 24)
+	_match_decline_btn.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2))
+	_match_decline_btn.pressed.connect(_on_match_decline)
+	btn_hbox.add_child(_match_decline_btn)
+
+
+var _accept_republish_timer: float = 0.0
+
+func _process_match_timer(delta: float) -> void:
+	if _match_dialog == null:
+		return
+
+	# Re-publish accept every 2 seconds to handle dropped messages
+	if _match_local_accepted and not _match_opp_accepted:
+		_accept_republish_timer += delta
+		if _accept_republish_timer >= 2.0:
+			_accept_republish_timer = 0.0
+			_publish_accept()
+
+	if _match_timer <= 0:
+		return
+	_match_timer -= delta
+	if _match_timer_label:
+		if _match_local_accepted and _match_opp_accepted:
+			_match_timer_label.text = "Connecting... %ds" % int(_match_timer)
+		elif not _match_local_accepted:
+			_match_timer_label.text = "%ds" % int(_match_timer)
+	if _match_timer <= 0:
+		if _match_local_accepted and _match_opp_accepted:
+			# Both accepted but P2P connection timed out
+			if _match_timer_label:
+				_match_timer_label.text = "Connection failed"
+				_match_timer_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2))
+			NetworkManager.disconnect_peer()
+			get_tree().create_timer(1.5).timeout.connect(func():
+				_close_match_dialog()
+				if _matchmaking:
+					_matchmaking.resume_search()
+			)
+		elif _match_local_accepted:
+			# Waited too long for opponent after accepting — auto-cancel
+			if _match_timer_label:
+				_match_timer_label.text = "Opponent not responding"
+				_match_timer_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2))
+			get_tree().create_timer(1.5).timeout.connect(func():
+				_on_match_decline()
+			)
+		else:
+			_on_match_decline()  # Auto-decline on timeout
+
+
+func _on_match_accept() -> void:
+	_match_local_accepted = true
+	# Lock accept, keep decline available
+	if _match_accept_btn:
+		_match_accept_btn.disabled = true
+		_match_accept_btn.text = "ACCEPTED"
+	if _match_decline_btn:
+		_match_decline_btn.text = "CANCEL"  # Relabel to cancel while waiting
+	# Publish acceptance with retain so opponent gets it immediately
+	_publish_accept()
+	# Update status
+	if _match_timer_label:
+		_match_timer_label.text = "Waiting for opponent..."
+		_match_timer_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.3))
+	_match_timer = MATCH_ACCEPT_TIMEOUT  # Restart timer for waiting phase
+	_check_both_accepted()
+
+
+func _publish_accept() -> void:
+	var pm = Engine.get_main_loop().root.get_node_or_null("ProfileManager")
+	var local_pid: String = pm.profile_id if pm else ""
+	var signaling: SignalingClient = NetworkManager.get_signaling()
+	# Use per-player subtopic with retain so it's not lost
+	var payload: Dictionary = {"action": "accept", "pid": local_pid}
+	signaling.publish(_match_accept_topic + "/" + local_pid.left(16), JSON.stringify(payload), true)
+
+
+func _on_match_decline() -> void:
+	var pm = Engine.get_main_loop().root.get_node_or_null("ProfileManager")
+	var local_pid: String = pm.profile_id if pm else ""
+	var signaling: SignalingClient = NetworkManager.get_signaling()
+	# Clear our retained accept and publish decline
+	signaling.publish(_match_accept_topic + "/" + local_pid.left(16), "", true)
+	var payload: Dictionary = {"action": "decline", "pid": local_pid}
+	signaling.publish(_match_accept_topic + "/" + local_pid.left(16), JSON.stringify(payload))
+	_close_match_dialog()
+	# Resume searching
+	if _matchmaking:
+		_matchmaking.resume_search()
+
+
+func _on_match_declined_by_opponent() -> void:
+	if _match_timer_label:
+		_match_timer_label.text = "Opponent declined"
+		_match_timer_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2))
+	# Brief pause then close
+	get_tree().create_timer(1.5).timeout.connect(func():
+		_close_match_dialog()
+		if _matchmaking:
+			_matchmaking.resume_search()
+	)
+
+
+var _match_connecting: bool = false
+
+func _check_both_accepted() -> void:
+	if _match_connecting:
+		return  # Already connecting, prevent double start_match_connection
+	if not _match_local_accepted or not _match_opp_accepted:
+		return
+
+	_match_connecting = true
+	# Both accepted — start connection!
+	if _match_timer_label:
+		_match_timer_label.text = "Connecting..."
+		_match_timer_label.add_theme_color_override("font_color", Color(0.2, 1.0, 0.3))
+	# Keep decline/cancel button active so user can bail if stuck
+	if _match_decline_btn:
+		_match_decline_btn.disabled = false
+		_match_decline_btn.text = "CANCEL"
+	_match_timer = 15  # Connection timeout — 15 seconds to establish P2P
+
+	# Clean up retained accept message
+	var pm = Engine.get_main_loop().root.get_node_or_null("ProfileManager")
+	var local_pid: String = pm.profile_id if pm else ""
+
+	# Disconnect accept listener
+	var signaling: SignalingClient = NetworkManager.get_signaling()
+	signaling.publish(_match_accept_topic + "/" + local_pid.left(16), "", true)  # Clear retained
+	if signaling.message_received.is_connected(_match_accept_cb):
+		signaling.message_received.disconnect(_match_accept_cb)
+
+	# Set game mode
+	GameManager.online_mode = true
+	GameManager.ranked_mode = _match_is_ranked
+	GameManager.ai_mode = false
+	GameManager.training_mode = false
+
+	# Connect to peer signal
+	if not NetworkManager.connected_to_peer.is_connected(_on_match_connected):
+		NetworkManager.connected_to_peer.connect(_on_match_connected, CONNECT_ONE_SHOT)
+
+	# Start the actual WebRTC connection
+	_matchmaking.start_match_connection(_match_opponent)
+
+
+func _on_match_connected() -> void:
+	if _match_timer_label:
+		_match_timer_label.text = "Connected! Starting match..."
 	get_tree().create_timer(1.0).timeout.connect(func():
-		NetworkManager.start_game()
-		NetworkManager.notify_game_start()
+		_close_match_dialog()
+		# Do NOT call start_game() here — that sets IN_GAME state which
+		# enables raw packet polling that steals RPC messages.
+		# start_game() is called by fight_scene when the fight actually begins.
 		get_tree().change_scene_to_file("res://scenes/ui/side_select.tscn")
 	)
+
+
+func _close_match_dialog() -> void:
+	_match_connecting = false
+	if _match_dialog:
+		_match_dialog.queue_free()
+		_match_dialog = null
+	# Disconnect accept listener if still connected
+	var signaling: SignalingClient = NetworkManager.get_signaling()
+	if _match_accept_cb.is_valid() and signaling.message_received.is_connected(_match_accept_cb):
+		signaling.message_received.disconnect(_match_accept_cb)
 
 
 # =============================================================================
@@ -1012,32 +1366,6 @@ func _build_ranked_panel() -> VBoxContainer:
 	ranked_cancel_btn.pressed.connect(_on_ranked_cancel_pressed)
 	ranked_cancel_btn.visible = false
 	panel.add_child(ranked_cancel_btn)
-
-	var region_hbox: HBoxContainer = HBoxContainer.new()
-	region_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	region_hbox.add_theme_constant_override("separation", 10)
-	panel.add_child(region_hbox)
-
-	var region_prompt: Label = Label.new()
-	region_prompt.text = "Region:"
-	region_prompt.add_theme_font_size_override("font_size", 18)
-	region_hbox.add_child(region_prompt)
-
-	ranked_region_btn = OptionButton.new()
-	ranked_region_btn.custom_minimum_size = Vector2(120, 40)
-	ranked_region_btn.add_theme_font_size_override("font_size", 18)
-	ranked_region_btn.add_item("USW")
-	ranked_region_btn.add_item("USC")
-	ranked_region_btn.add_item("USE")
-	ranked_region_btn.add_item("SA")
-	ranked_region_btn.add_item("EUW")
-	ranked_region_btn.add_item("EUE")
-	ranked_region_btn.add_item("AW")
-	ranked_region_btn.add_item("ASEA")
-	ranked_region_btn.add_item("EA")
-	ranked_region_btn.add_item("OCEW")
-	ranked_region_btn.add_item("OCEE")
-	region_hbox.add_child(ranked_region_btn)
 
 	ranked_range_label = Label.new()
 	ranked_range_label.text = "Range: ---"
@@ -1111,11 +1439,25 @@ func _build_leaderboard_panel() -> VBoxContainer:
 # =============================================================================
 
 func _on_ranked_find_pressed():
-	# Ensure lobby broker is connected first
 	var signaling: SignalingClient = NetworkManager.get_signaling()
+	ranked_find_btn.visible = false
+	ranked_cancel_btn.visible = true
+
 	if not signaling.is_connected_to_broker():
 		signaling.connect_to_broker()
+		ranked_status_label.text = "Connecting to server..."
+		ranked_status_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.7))
+		signaling.connected.connect(_on_broker_connected_for_ranked, CONNECT_ONE_SHOT)
+	else:
+		_start_ranked_matchmaking(signaling)
 
+
+func _on_broker_connected_for_ranked():
+	var signaling: SignalingClient = NetworkManager.get_signaling()
+	_start_ranked_matchmaking(signaling)
+
+
+func _start_ranked_matchmaking(signaling: SignalingClient):
 	if _matchmaking == null:
 		_matchmaking = MatchmakingQueue.new()
 		_matchmaking.init(signaling)
@@ -1123,11 +1465,10 @@ func _on_ranked_find_pressed():
 		_matchmaking.queue_status_changed.connect(_on_ranked_status_changed)
 
 	var rating = _get_local_rating()
-	var region = ranked_region_btn.get_item_text(ranked_region_btn.selected)
-	# Ranked always uses WebRTC for internet play
+	var region: String = _auto_detect_region()
 	_matchmaking.join_queue(rating, region, "webrtc")
-	ranked_find_btn.visible = false
-	ranked_cancel_btn.visible = true
+	ranked_status_label.text = "Searching... [%s] (Rating: %d)" % [region, rating]
+	ranked_status_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.3))
 
 
 func _on_ranked_cancel_pressed():
@@ -1139,6 +1480,11 @@ func _on_ranked_cancel_pressed():
 
 
 func _on_ranked_match_found(opponent: Dictionary):
+	_show_match_found_dialog(opponent, true)
+
+
+func _on_ranked_match_found_legacy(opponent: Dictionary):
+	# Legacy handler — kept for reference, replaced by dialog
 	var opp_name: String = opponent.get("username", "Unknown")
 	var opp_rating: int = opponent.get("rating", 0)
 	var is_host: bool = opponent.get("is_host", false)
@@ -1434,3 +1780,6 @@ func _process(delta):
 	# Tick matchmaking queue
 	if _matchmaking and _matchmaking.is_in_queue():
 		_matchmaking.tick(delta)
+
+	# Tick match found dialog timer
+	_process_match_timer(delta)

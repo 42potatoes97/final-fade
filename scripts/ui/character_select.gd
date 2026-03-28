@@ -54,6 +54,10 @@ const INPUT_COOLDOWN_FRAMES = 8
 
 var proceeding: bool = false
 
+# Online sync
+var _online_local_ready_char: bool = false
+var _online_opp_ready_char: bool = false
+
 
 func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -67,6 +71,11 @@ func _ready() -> void:
 	if GameManager.p2_device_type == InputManager.DeviceType.AI:
 		player_data[1].ready = true
 		_update_player_display(1)
+	# Online mode: connect sync, listen for opponent ready
+	if GameManager.online_mode:
+		_online_local_ready_char = false
+		_online_opp_ready_char = false
+		NetworkManager.menu_sync_received.connect(_on_char_menu_sync)
 
 
 func _build_ui() -> void:
@@ -338,6 +347,12 @@ func _physics_process(_delta: float) -> void:
 		return
 
 	for pid in range(2):
+		# Online mode: skip the remote player's side entirely
+		if GameManager.online_mode:
+			var local_idx: int = GameManager.local_side - 1
+			if pid != local_idx:
+				continue
+
 		if input_cooldown[pid] > 0:
 			input_cooldown[pid] -= 1
 			continue
@@ -422,22 +437,30 @@ func _read_device_input(pid: int) -> Dictionary:
 	var result = {"up": false, "down": false, "left": false, "right": false, "confirm": false}
 
 	if dev_type == InputManager.DeviceType.KEYBOARD:
-		# Keyboard input — check appropriate keys
-		var kb_player = 1 if dev_id == -1 else 2
-		if kb_player == 1:
-			# WASD
-			result.up = Input.is_key_pressed(KEY_W)
-			result.down = Input.is_key_pressed(KEY_S)
-			result.left = Input.is_key_pressed(KEY_A)
-			result.right = Input.is_key_pressed(KEY_D)
-			result.confirm = Input.is_key_pressed(KEY_U) or Input.is_key_pressed(KEY_SPACE)
+		if GameManager.online_mode:
+			# Online: accept both WASD and arrows for the local player
+			result.up = Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP)
+			result.down = Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN)
+			result.left = Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT)
+			result.right = Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT)
+			result.confirm = Input.is_key_pressed(KEY_U) or Input.is_key_pressed(KEY_SPACE) or Input.is_key_pressed(KEY_ENTER) or Input.is_key_pressed(KEY_KP_5)
 		else:
-			# Arrow keys / numpad
-			result.up = Input.is_key_pressed(KEY_UP) or Input.is_key_pressed(KEY_KP_8)
-			result.down = Input.is_key_pressed(KEY_DOWN) or Input.is_key_pressed(KEY_KP_2)
-			result.left = Input.is_key_pressed(KEY_LEFT) or Input.is_key_pressed(KEY_KP_4)
-			result.right = Input.is_key_pressed(KEY_RIGHT) or Input.is_key_pressed(KEY_KP_6)
-			result.confirm = Input.is_key_pressed(KEY_KP_5) or Input.is_key_pressed(KEY_ENTER)
+			# Keyboard input — check appropriate keys
+			var kb_player = 1 if dev_id == -1 else 2
+			if kb_player == 1:
+				# WASD
+				result.up = Input.is_key_pressed(KEY_W)
+				result.down = Input.is_key_pressed(KEY_S)
+				result.left = Input.is_key_pressed(KEY_A)
+				result.right = Input.is_key_pressed(KEY_D)
+				result.confirm = Input.is_key_pressed(KEY_U) or Input.is_key_pressed(KEY_SPACE)
+			else:
+				# Arrow keys / numpad
+				result.up = Input.is_key_pressed(KEY_UP) or Input.is_key_pressed(KEY_KP_8)
+				result.down = Input.is_key_pressed(KEY_DOWN) or Input.is_key_pressed(KEY_KP_2)
+				result.left = Input.is_key_pressed(KEY_LEFT) or Input.is_key_pressed(KEY_KP_4)
+				result.right = Input.is_key_pressed(KEY_RIGHT) or Input.is_key_pressed(KEY_KP_6)
+				result.confirm = Input.is_key_pressed(KEY_KP_5) or Input.is_key_pressed(KEY_ENTER)
 
 	elif dev_type == InputManager.DeviceType.GAMEPAD:
 		var stick_x = Input.get_joy_axis(dev_id, JOY_AXIS_LEFT_X)
@@ -452,7 +475,42 @@ func _read_device_input(pid: int) -> Dictionary:
 
 
 func _check_both_ready() -> void:
+	if GameManager.online_mode:
+		# Online: local player readied — send sync, wait for opponent
+		var local_idx: int = GameManager.local_side - 1
+		if player_data[local_idx].ready and not _online_local_ready_char:
+			_online_local_ready_char = true
+			var data: Dictionary = player_data[local_idx]
+			NetworkManager.send_menu_sync({
+				"screen": "char_select",
+				"ready": true,
+				"side": GameManager.local_side,
+				"skin": data.skin,
+				"torso": data.torso,
+				"class_idx": data.class_idx,
+			})
+			if _online_opp_ready_char:
+				proceeding = true
+				_save_and_proceed()
+		return
+
 	if player_data[0].ready and player_data[1].ready:
+		proceeding = true
+		_save_and_proceed()
+
+
+func _on_char_menu_sync(data: Dictionary) -> void:
+	if data.get("screen", "") != "char_select":
+		return
+	_online_opp_ready_char = data.get("ready", false)
+	# Always apply opponent's choices to OUR remote side (opposite of local)
+	var remote_idx: int = 1 - (GameManager.local_side - 1)
+	player_data[remote_idx].skin = int(data.get("skin", 0))
+	player_data[remote_idx].torso = int(data.get("torso", 0))
+	player_data[remote_idx].class_idx = int(data.get("class_idx", 0))
+	player_data[remote_idx].ready = true
+	_update_player_display(remote_idx)
+	if _online_opp_ready_char and _online_local_ready_char and not proceeding:
 		proceeding = true
 		_save_and_proceed()
 

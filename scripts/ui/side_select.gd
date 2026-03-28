@@ -17,6 +17,13 @@ var input_cooldown: Dictionary = {}  # device_key -> frames remaining
 const COOLDOWN_FRAMES: int = 10
 var proceeding: bool = false
 
+# Online sync state
+var _online_local_ready: bool = false
+var _online_opp_ready: bool = false
+var _online_local_side: int = 0
+var _online_local_idx: int = -1
+var _online_opp_side: int = 0
+
 # AI difficulty selection
 var ai_difficulty_phase: bool = false  # True when picking CPU difficulty
 var ai_difficulty_idx: int = 1         # Current selected difficulty
@@ -32,9 +39,29 @@ const AI_DIFFICULTIES = [
 
 func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+	# Online mode: single local device picks P1 or P2, opponent gets the other
+	if GameManager.online_mode:
+		_detect_devices_online()
+		_build_ui()
+		UIFocusHelper.setup_focus(self)
+		NetworkManager.menu_sync_received.connect(_on_menu_sync)
+		return
+
 	_detect_devices()
 	_build_ui()
 	UIFocusHelper.setup_focus(self)
+
+
+func _detect_devices_online() -> void:
+	# In online mode, show keyboard + all connected gamepads as input options
+	devices.clear()
+	devices.append({"type": InputManager.DeviceType.KEYBOARD, "id": -1, "name": "Keyboard (WASD)", "side": 0, "confirmed": false})
+	for pad_id in Input.get_connected_joypads():
+		var pad_name = Input.get_joy_name(pad_id)
+		if pad_name == "":
+			pad_name = "Gamepad " + str(pad_id)
+		devices.append({"type": InputManager.DeviceType.GAMEPAD, "id": pad_id, "name": pad_name, "side": 0, "confirmed": false})
 
 
 func _detect_devices() -> void:
@@ -250,15 +277,21 @@ func _physics_process(_delta: float) -> void:
 				changed = true
 		else:
 			if input.left and dev.side != 1:
-				# Move to P1 side — only if not occupied
-				if not _side_occupied(1):
-					dev.side = 1
-					changed = true
+				# Move to P1 side
+				if GameManager.online_mode:
+					_kick_all_others(i)  # Only one device active in online
+				elif _side_occupied(1):
+					continue  # Offline: block if occupied
+				dev.side = 1
+				changed = true
 			elif input.right and dev.side != 2:
-				# Move to P2 side — only if not occupied
-				if not _side_occupied(2):
-					dev.side = 2
-					changed = true
+				# Move to P2 side
+				if GameManager.online_mode:
+					_kick_all_others(i)
+				elif _side_occupied(2):
+					continue  # Offline: block if occupied
+				dev.side = 2
+				changed = true
 			elif (input.left and dev.side == 1) or (input.right and dev.side == 2):
 				# Already on this side, pressing same direction = go back to center
 				pass
@@ -267,13 +300,23 @@ func _physics_process(_delta: float) -> void:
 				dev.confirmed = true
 				changed = true
 			# Allow moving back to center by pressing opposite of current side
-			if not changed and dev.side == 1 and input.right and _side_occupied(2):
-				# Can't go to P2 (occupied), go to center instead
-				dev.side = 0
+			if not changed and dev.side == 1 and input.right:
+				if GameManager.online_mode:
+					_kick_all_others(i)
+				elif _side_occupied(2):
+					dev.side = 0
+					changed = true
+					continue
+				dev.side = 2
 				changed = true
-			elif not changed and dev.side == 2 and input.left and _side_occupied(1):
-				# Can't go to P1 (occupied), go to center instead
-				dev.side = 0
+			elif not changed and dev.side == 2 and input.left:
+				if GameManager.online_mode:
+					_kick_all_others(i)
+				elif _side_occupied(1):
+					dev.side = 0
+					changed = true
+					continue
+				dev.side = 1
 				changed = true
 
 		if changed:
@@ -287,6 +330,22 @@ func _side_occupied(side: int) -> bool:
 		if dev.side == side:
 			return true
 	return false
+
+
+func _kick_side_occupant(side: int) -> void:
+	# Kick any device on this side back to center (and un-confirm)
+	for dev in devices:
+		if dev.side == side:
+			dev.side = 0
+			dev.confirmed = false
+
+
+func _kick_all_others(keep_idx: int) -> void:
+	# Online: only one device can occupy any side — kick all others to center
+	for j in range(devices.size()):
+		if j != keep_idx and devices[j].side != 0:
+			devices[j].side = 0
+			devices[j].confirmed = false
 
 
 func _update_all_display() -> void:
@@ -373,6 +432,23 @@ func _check_ready() -> void:
 				_show_difficulty_picker()
 				return
 
+	# Online mode: confirm side → send to opponent → wait for opponent ready
+	if GameManager.online_mode:
+		if (p1_confirmed or p2_confirmed) and not _online_local_ready:
+			var local_side: int = 1 if p1_confirmed else 2
+			var local_idx: int = p1_idx if p1_confirmed else p2_idx
+			_online_local_side = local_side
+			_online_local_idx = local_idx
+			_online_local_ready = true
+			# Send our choice to opponent
+			NetworkManager.send_menu_sync({"screen": "side_select", "side": local_side, "ready": true})
+			if _online_opp_ready:
+				_online_both_ready()
+			else:
+				info_label.text = "Waiting for opponent..."
+				info_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.3))
+		return
+
 	if p1_confirmed and p2_confirmed:
 		info_label.text = "Both confirmed!"
 		info_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
@@ -399,6 +475,50 @@ func _save_and_proceed(p1_idx: int, p2_idx: int) -> void:
 	InputManager.assign_device(2, p2_dev.type, p2_dev.id)
 
 	get_tree().create_timer(0.5).timeout.connect(func(): get_tree().change_scene_to_file("res://scenes/ui/character_select.tscn"))
+
+
+func _save_and_proceed_online(local_idx: int, local_side: int) -> void:
+	var local_dev = devices[local_idx]
+	var remote_side: int = 2 if local_side == 1 else 1
+
+	# Local player gets their chosen side
+	if local_side == 1:
+		GameManager.p1_device_type = local_dev.type
+		GameManager.p1_device_id = local_dev.id
+		InputManager.assign_device(1, local_dev.type, local_dev.id)
+		GameManager.p2_device_type = InputManager.DeviceType.NETWORK
+		GameManager.p2_device_id = -1
+		InputManager.assign_device(2, InputManager.DeviceType.NETWORK, -1)
+	else:
+		GameManager.p2_device_type = local_dev.type
+		GameManager.p2_device_id = local_dev.id
+		InputManager.assign_device(2, local_dev.type, local_dev.id)
+		GameManager.p1_device_type = InputManager.DeviceType.NETWORK
+		GameManager.p1_device_id = -1
+		InputManager.assign_device(1, InputManager.DeviceType.NETWORK, -1)
+
+	get_tree().create_timer(0.5).timeout.connect(func(): get_tree().change_scene_to_file("res://scenes/ui/character_select.tscn"))
+
+
+func _on_menu_sync(data: Dictionary) -> void:
+	if data.get("screen", "") != "side_select":
+		return
+	_online_opp_side = int(data.get("side", 0))
+	_online_opp_ready = data.get("ready", false)
+	if _online_opp_ready and _online_local_ready:
+		_online_both_ready()
+	elif _online_opp_ready and not _online_local_ready:
+		info_label.text = "Opponent ready (P%d) — pick your side!" % _online_opp_side
+		info_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.3))
+
+
+func _online_both_ready() -> void:
+	if proceeding:
+		return
+	proceeding = true
+	info_label.text = "Both ready! Starting..."
+	info_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
+	_save_and_proceed_online(_online_local_idx, _online_local_side)
 
 
 func _read_device_nav(dev_type: int, dev_id: int) -> Dictionary:

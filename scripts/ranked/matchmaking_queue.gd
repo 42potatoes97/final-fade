@@ -2,8 +2,10 @@ class_name MatchmakingQueue
 extends RefCounted
 
 ## MQTT-based matchmaking queue for Final Fade ranked play.
-## Publishes player entries to a shared topic and evaluates candidates
-## using expanding rating range over time.
+## Publishes player entries to per-player subtopics (retained) and evaluates
+## candidates using expanding rating/latency ranges over time.
+## match_found signal is emitted when a candidate is found — the UI handles
+## accept/decline before calling start_match_connection().
 
 signal match_found(opponent: Dictionary)
 signal queue_status_changed(status: String)
@@ -15,17 +17,12 @@ const RATING_RANGE_INITIAL: int = 100
 const RATING_RANGE_EXPANSION: float = 50.0
 const RATING_RANGE_MAX: int = 500
 const ANNOUNCE_INTERVAL: float = 5.0
-const ENTRY_TIMEOUT: float = 60.0
+const ENTRY_TIMEOUT: float = 15.0
 const MAX_CANDIDATES: int = 200
 
 # Region latency matrix (approximate RTT in ms based on real-world data)
-# Sources: Azure network latency, WonderNetwork, CloudPing
-# Regions: USW=US West, USC=US Central, USE=US East, SA=South America,
-#   EUW=EU West, EUE=EU East, AW=Asia West(India/ME), ASEA=SE Asia,
-#   EA=East Asia(JP/KR/CN), OCEW=Oceania West(AU), OCEE=Oceania East(NZ)
 const REGIONS: Array = ["USW", "USC", "USE", "SA", "EUW", "EUE", "AW", "ASEA", "EA", "OCEW", "OCEE"]
 
-# Symmetric latency matrix [from][to] in ms (approximate RTT)
 const LATENCY_MS: Dictionary = {
 	"USW":  {"USW": 0, "USC": 35, "USE": 65, "SA": 120, "EUW": 140, "EUE": 160, "AW": 220, "ASEA": 170, "EA": 110, "OCEW": 160, "OCEE": 180},
 	"USC":  {"USW": 35, "USC": 0, "USE": 30, "SA": 100, "EUW": 110, "EUE": 130, "AW": 200, "ASEA": 190, "EA": 140, "OCEW": 180, "OCEE": 200},
@@ -41,20 +38,24 @@ const LATENCY_MS: Dictionary = {
 }
 
 # Max latency thresholds that expand over time (ms)
-const LATENCY_TIER_GOOD: int = 80      # Same region / neighbors
-const LATENCY_TIER_OK: int = 150       # Cross-region playable
-const LATENCY_TIER_ROUGH: int = 220    # Long distance, laggy but possible
-const REGION_EXPAND_INTERVAL: float = 20.0  # Expand latency threshold every 20s
+const LATENCY_TIER_GOOD: int = 80
+const LATENCY_TIER_OK: int = 150
+const LATENCY_TIER_ROUGH: int = 220
+const REGION_EXPAND_INTERVAL: float = 20.0
 
 var _signaling: SignalingClient
 var _candidates: Dictionary = {}
 var _in_queue: bool = false
-var _is_quick_match: bool = false  # true = quick match (no rating), false = ranked
+var _is_quick_match: bool = false
 var _queue_time: float = 0.0
 var _announce_timer: float = 0.0
 var _local_entry: Dictionary = {}
 var _current_range: int = RATING_RANGE_INITIAL
 var _active_topic: String = ""
+var _publish_topic: String = ""
+var _subscribe_topic: String = ""
+var _subscribed: bool = false
+var _match_pending: bool = false  # True while showing match found dialog
 
 
 func init(signaling: SignalingClient) -> void:
@@ -63,7 +64,6 @@ func init(signaling: SignalingClient) -> void:
 
 
 func join_quick_match(region: String, transport: String) -> void:
-	# Quick match — no rating check, just region + latency matching
 	_is_quick_match = true
 	_join_internal(0, region, transport, QUICK_QUEUE_TOPIC)
 
@@ -87,7 +87,7 @@ func _join_internal(rating: int, region: String, transport: String, topic: Strin
 		"timestamp": Time.get_unix_time_from_system(),
 	}
 
-	# Sign the entry with the player's signing key
+	# Sign the entry
 	var signing_key: PackedByteArray = pm.signing_key if pm else PackedByteArray()
 	if signing_key.size() > 0:
 		var canonical: String = MatchProof._sorted_json(_local_entry)
@@ -95,29 +95,34 @@ func _join_internal(rating: int, region: String, transport: String, topic: Strin
 		_local_entry["signature"] = Marshalls.raw_to_base64(sig)
 
 	_active_topic = topic
-	_signaling.subscribe(_active_topic)
-	_signaling.publish(_active_topic, JSON.stringify(_local_entry))
+	_publish_topic = topic + "/" + pid.left(16)
+	_subscribe_topic = topic + "/+"
+	_subscribed = false
+	_match_pending = false
+
+	if _signaling.is_connected_to_broker():
+		_signaling.subscribe(_subscribe_topic)
+		_signaling.publish(_publish_topic, JSON.stringify(_local_entry), true)
+		_subscribed = true
 
 	_in_queue = true
 	_queue_time = 0.0
 	_announce_timer = 0.0
 	_current_range = RATING_RANGE_INITIAL
 	_candidates.clear()
-	queue_status_changed.emit("searching")
+	queue_status_changed.emit("Searching...")
 
 
 func leave_queue() -> void:
 	if not _in_queue:
 		return
-
-	var removal: Dictionary = {
-		"profile_id": _local_entry.get("profile_id", ""),
-		"status": "leaving",
-	}
-	_signaling.publish(_active_topic, JSON.stringify(removal))
-
+	# Clear retained message
+	if _publish_topic != "" and _signaling.is_connected_to_broker():
+		_signaling.publish(_publish_topic, "", true)
 	_candidates.clear()
 	_in_queue = false
+	_subscribed = false
+	_match_pending = false
 	_local_entry = {}
 	queue_status_changed.emit("idle")
 
@@ -126,14 +131,20 @@ func tick(delta: float) -> void:
 	if not _in_queue:
 		return
 
+	# Retry subscribe once broker is connected
+	if not _subscribed and _signaling.is_connected_to_broker():
+		_signaling.subscribe(_subscribe_topic)
+		_signaling.publish(_publish_topic, JSON.stringify(_local_entry), true)
+		_subscribed = true
+		_announce_timer = 0.0
+
 	_queue_time += delta
 	_announce_timer += delta
 
-	# Re-announce periodically so new joiners see us
+	# Re-announce periodically
 	if _announce_timer >= ANNOUNCE_INTERVAL:
 		_announce_timer = 0.0
 		_local_entry["timestamp"] = Time.get_unix_time_from_system()
-		# Re-sign with updated timestamp
 		var pm = Engine.get_main_loop().root.get_node_or_null("ProfileManager")
 		var signing_key: PackedByteArray = pm.signing_key if pm else PackedByteArray()
 		if signing_key.size() > 0:
@@ -142,16 +153,25 @@ func tick(delta: float) -> void:
 			var canonical: String = MatchProof._sorted_json(entry_no_sig)
 			var sig: PackedByteArray = CryptoUtils.hmac_sha256(signing_key, canonical.to_utf8_buffer())
 			_local_entry["signature"] = Marshalls.raw_to_base64(sig)
-		_signaling.publish(_active_topic, JSON.stringify(_local_entry))
+		if _signaling.is_connected_to_broker():
+			_signaling.publish(_publish_topic, JSON.stringify(_local_entry), true)
 
-	# Expand rating range over time: +EXPANSION every 15 seconds
+	# Expand rating range over time
 	_current_range = mini(
 		RATING_RANGE_INITIAL + int(_queue_time / 15.0 * RATING_RANGE_EXPANSION),
 		RATING_RANGE_MAX,
 	)
 
-	_evaluate_candidates()
+	# Don't evaluate while a match dialog is showing
+	if not _match_pending:
+		_evaluate_candidates()
 	_cleanup_stale()
+
+	# Update status
+	if _subscribed:
+		var t: int = int(_queue_time)
+		var region: String = _local_entry.get("region", "?")
+		queue_status_changed.emit("Searching... [%s] %ds" % [region, t])
 
 
 func _evaluate_candidates() -> void:
@@ -160,17 +180,15 @@ func _evaluate_candidates() -> void:
 	var local_transport: String = _local_entry.get("transport", "")
 	var local_region: String = _local_entry.get("region", "NA")
 
-	# Max allowed latency threshold (expands over time)
 	var expand_steps: int = int(_queue_time / REGION_EXPAND_INTERVAL)
-	var max_latency: int = LATENCY_TIER_GOOD  # Start with good connections only
+	var max_latency: int = LATENCY_TIER_GOOD
 	if expand_steps >= 1:
-		max_latency = LATENCY_TIER_OK  # After 20s: accept cross-region
+		max_latency = LATENCY_TIER_OK
 	if expand_steps >= 2:
-		max_latency = LATENCY_TIER_ROUGH  # After 40s: accept long distance
+		max_latency = LATENCY_TIER_ROUGH
 	if expand_steps >= 3:
-		max_latency = 999  # After 60s: accept anyone
+		max_latency = 999
 
-	# Find best candidate: lowest latency first, then closest rating
 	var best_pid: String = ""
 	var best_latency: int = 999
 	var best_rating_diff: int = 999999
@@ -183,20 +201,15 @@ func _evaluate_candidates() -> void:
 		var candidate_rating: int = int(candidate.get("rating", 0))
 		var candidate_region: String = candidate.get("region", "")
 
-		# Rating must be within current expanding range (skip for quick match)
 		if not _is_quick_match and absi(candidate_rating - local_rating) > _current_range:
 			continue
-
-		# Transport must match
 		if candidate.get("transport", "") != local_transport:
 			continue
 
-		# Latency check
 		var latency: int = _get_region_latency(local_region, candidate_region)
 		if latency > max_latency:
 			continue
 
-		# Score: prefer lower latency, then closer rating
 		var rating_diff: int = absi(candidate_rating - local_rating)
 		if latency < best_latency or (latency == best_latency and rating_diff < best_rating_diff):
 			best_pid = pid
@@ -207,8 +220,6 @@ func _evaluate_candidates() -> void:
 		return
 
 	var candidate: Dictionary = _candidates[best_pid]
-
-	# Deterministic host selection: lower profile_id hosts
 	var is_host: bool = local_pid < best_pid
 
 	var opponent: Dictionary = {
@@ -218,147 +229,167 @@ func _evaluate_candidates() -> void:
 		"region": candidate.get("region", ""),
 		"transport": candidate.get("transport", ""),
 		"is_host": is_host,
+		"latency": best_latency,
 	}
 
-	print("[Ranked] Match found! vs %s (rating %d, region %s, host=%s)" % [
-		opponent["username"], opponent["rating"], opponent["region"], str(is_host)])
+	# Pause candidate evaluation while dialog is showing
+	_match_pending = true
+	match_found.emit(opponent)
 
-	# Start post-match room code exchange
-	_initiate_match_connection(opponent)
+
+func resume_search() -> void:
+	# Called when user declines a match — resume candidate evaluation
+	_match_pending = false
+
+
+func get_local_entry() -> Dictionary:
+	return _local_entry
+
+
+func start_match_connection(opponent: Dictionary) -> void:
+	# Called by the UI after both players accept.
+	# Creates a deterministic match topic and initiates WebRTC connection.
+	var local_pid: String = _local_entry.get("profile_id", "")
+	var opp_pid: String = opponent["profile_id"]
+	var sorted_pids: Array = [local_pid, opp_pid]
+	sorted_pids.sort()
+	var match_topic: String = MATCH_TOPIC_PREFIX + sorted_pids[0].left(16) + "_" + sorted_pids[1].left(16)
+
+	print("[MM] Starting connection: host=%s topic=%s" % [str(opponent["is_host"]), match_topic])
+
+	# Generate a unique match nonce to reject stale retained messages
+	var match_nonce: String = "%d_%s" % [int(Time.get_unix_time_from_system()), local_pid.left(8)]
+
+	if opponent["is_host"]:
+		# We are the host — connect callback BEFORE host_game() because
+		# create_host() emits signaling_ready → room_code_ready synchronously
+		NetworkManager.active_transport = "webrtc"
+		# First clear any stale retained room code on the match topic
+		_signaling.publish(match_topic, "", true)
+		NetworkManager.room_code_ready.connect(
+			func(code: String):
+				var payload: Dictionary = {
+					"room_code": code,
+					"host_pid": local_pid,
+					"nonce": match_nonce,
+					"ts": int(Time.get_unix_time_from_system()),
+				}
+				_signaling.publish(match_topic, JSON.stringify(payload), true)
+				print("[MM] Room code published: %s (nonce=%s)" % [code, match_nonce])
+		, CONNECT_ONE_SHOT)
+		NetworkManager.host_game()
+	else:
+		# We are the joiner — wait for room code, reject stale retained messages
+		_signaling.subscribe(match_topic)
+		var _room_joined: bool = false
+		var _room_cb: Callable
+		_room_cb = func(topic: String, payload: String):
+			if _room_joined:
+				return
+			if topic != match_topic:
+				return
+			if payload.is_empty():
+				return  # Empty retained cleanup
+			var parsed = JSON.parse_string(payload)
+			if parsed == null or not parsed is Dictionary:
+				return
+			var code: String = parsed.get("room_code", "")
+			if code.is_empty():
+				return
+			# Reject stale room codes — must be within last 30 seconds
+			var msg_ts: int = int(parsed.get("ts", 0))
+			var now_ts: int = int(Time.get_unix_time_from_system())
+			if abs(now_ts - msg_ts) > 30:
+				print("[MM] Ignoring stale room code: %s (age=%ds)" % [code, abs(now_ts - msg_ts)])
+				return
+			print("[MM] Received room code: %s" % code)
+			_room_joined = true
+			if _room_cb.is_valid() and _signaling.message_received.is_connected(_room_cb):
+				_signaling.message_received.disconnect(_room_cb)
+			NetworkManager.active_transport = "webrtc"
+			NetworkManager.join_with_code(code)
+		_signaling.message_received.connect(_room_cb)
+
 	leave_queue()
 
 
+func get_region_latency(region_a: String, region_b: String) -> int:
+	return _get_region_latency(region_a, region_b)
+
+
 func _get_region_latency(region_a: String, region_b: String) -> int:
-	# Returns estimated RTT in ms between two regions
 	if region_a == region_b:
 		return 0
 	var row: Dictionary = LATENCY_MS.get(region_a, {})
 	return row.get(region_b, 999)
 
 
-func _initiate_match_connection(opponent: Dictionary) -> void:
-	# Create a deterministic per-match topic from both profile IDs
-	var local_pid: String = _local_entry.get("profile_id", "")
-	var opp_pid: String = opponent["profile_id"]
-	var sorted_pids: Array = [local_pid, opp_pid]
-	sorted_pids.sort()
-	var match_topic: String = MATCH_TOPIC_PREFIX + sorted_pids[0].left(8) + "_" + sorted_pids[1].left(8)
-
-	if opponent["is_host"]:
-		# We are the host — create a WebRTC room and publish the code
-		NetworkManager.active_transport = "webrtc"
-		NetworkManager.host_game()
-		# Wait for room code, then publish to match topic
-		NetworkManager.room_code_ready.connect(
-			func(code: String):
-				var payload: Dictionary = {"room_code": code, "host_pid": local_pid}
-				_signaling.publish(match_topic, JSON.stringify(payload), true)
-				print("[Ranked] Room code published to %s" % match_topic)
-		, CONNECT_ONE_SHOT)
-	else:
-		# We are the joiner — subscribe to match topic and wait for room code
-		_signaling.subscribe(match_topic)
-		_signaling.message_received.connect(
-			func(topic: String, payload: String):
-				if topic != match_topic:
-					return
-				var parsed = JSON.parse_string(payload)
-				if parsed == null or not parsed is Dictionary:
-					return
-				var code: String = parsed.get("room_code", "")
-				if code.is_empty():
-					return
-				print("[Ranked] Received room code from host: %s" % code)
-				NetworkManager.active_transport = "webrtc"
-				NetworkManager.join_with_code(code)
-		, CONNECT_ONE_SHOT)
-
-	match_found.emit(opponent)
-
-
 func _cleanup_stale() -> void:
 	var now: float = Time.get_unix_time_from_system()
 	var stale_ids: Array = []
-
 	for pid in _candidates:
 		var ts: float = float(_candidates[pid].get("timestamp", 0.0))
 		if now - ts > ENTRY_TIMEOUT:
 			stale_ids.append(pid)
-
 	for pid in stale_ids:
 		_candidates.erase(pid)
 
 
 func _on_queue_message(topic: String, payload: String) -> void:
-	if topic != _active_topic:
+	if not topic.begins_with(_active_topic):
 		return
+	if payload.is_empty():
+		return  # Empty retained message cleanup — ignore
 
 	var parsed = JSON.parse_string(payload)
 	if parsed == null or not parsed is Dictionary:
 		return
 
-	# --- Strict field validation ---
-
-	# profile_id: String, max 64 chars
 	var pid = parsed.get("profile_id")
 	if not pid is String or pid.is_empty() or pid.length() > 64:
 		return
+	var local_pid: String = _local_entry.get("profile_id", "")
+	if pid == local_pid:
+		return  # Own message
 
-	# Check for leaving status
 	var status = parsed.get("status")
 	if status is String and status == "leaving":
 		_candidates.erase(pid)
 		return
 
-	# username: String, max 32 chars
 	var uname = parsed.get("username")
 	if not uname is String or uname.length() > 32:
 		return
 
-	# rating: number, range 100-9999
 	var rating = parsed.get("rating")
 	if not (rating is int or rating is float):
 		return
 	var rating_int: int = int(rating)
-	if rating_int < 100 or rating_int > 9999:
+	if rating_int != 0 and (rating_int < 100 or rating_int > 9999):
 		return
 
-	# region: String, max 4 chars
 	var region = parsed.get("region")
 	if not region is String or region.length() > 4:
 		return
 
-	# transport: must be "enet" or "webrtc"
 	var transport = parsed.get("transport")
 	if not transport is String or (transport != "enet" and transport != "webrtc"):
 		return
 
-	# timestamp: must be a number
 	var ts = parsed.get("timestamp")
 	if not (ts is int or ts is float):
 		return
+	# Reject stale entries (older than ENTRY_TIMEOUT) — catches retained broker messages
+	var now: float = Time.get_unix_time_from_system()
+	if now - float(ts) > ENTRY_TIMEOUT:
+		return
 
-	# Verify signature if present; skip entries with missing/invalid signatures
 	var sig_b64 = parsed.get("signature")
 	if not sig_b64 is String or sig_b64.is_empty():
 		return
-	# Reconstruct canonical JSON without signature field for verification
-	var entry_for_verify: Dictionary = {
-		"profile_id": pid,
-		"username": uname,
-		"rating": rating,
-		"region": region,
-		"transport": transport,
-		"timestamp": ts,
-	}
-	var canonical: String = MatchProof._sorted_json(entry_for_verify)
-	# We cannot verify HMAC without the sender's key, but we require signature presence
-	# and store it for later verification when keys are exchanged
-	# For now, reject entries without a signature field
 	if Marshalls.base64_to_raw(sig_b64).size() != 32:
-		return  # Invalid HMAC-SHA256 signature length
+		return
 
-	# Cap candidates to prevent memory exhaustion
 	if not _candidates.has(pid) and _candidates.size() >= MAX_CANDIDATES:
 		return
 

@@ -14,6 +14,9 @@ const PROFILE_PATH: String = "user://profile.json"
 
 func _ready() -> void:
 	load_profile()
+	# Append a random instance suffix so multiple local instances have distinct IDs
+	# (same profile on disk, but unique in matchmaking — only matters for local testing)
+	profile_id = profile_id + "-" + _random_hex(4)
 
 
 func load_profile() -> void:
@@ -196,3 +199,11 @@ func _generate_uuid_v4() -> String:
 		hex.substr(16, 4),
 		hex.substr(20, 12),
 	]
+
+
+func _random_hex(length: int) -> String:
+	const HEX_CHARS := "0123456789abcdef"
+	var result := ""
+	for i in length:
+		result += HEX_CHARS[randi() % 16]
+	return result

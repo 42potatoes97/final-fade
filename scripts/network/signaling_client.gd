@@ -8,8 +8,8 @@ signal connected
 signal disconnected
 signal message_received(topic: String, payload: String)
 
-# Mosquitto public broker — port 8080 plain WebSocket, 8081 WSS
-const BROKER_URL: String = "ws://test.mosquitto.org:8080/mqtt"
+# EMQX public broker — fastest free MQTT broker, WSS on port 8084
+const BROKER_URL: String = "wss://broker.emqx.io:8084/mqtt"
 const KEEPALIVE_SEC: float = 30.0
 
 var _ws: WebSocketPeer

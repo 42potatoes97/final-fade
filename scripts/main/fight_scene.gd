@@ -97,8 +97,22 @@ func _ready() -> void:
 
 	# Online mode: initialize rollback and set remote player as NETWORK device
 	if GameManager.online_mode:
-		var remote_id = NetworkManager.remote_player_id
-		InputManager.assign_device(remote_id, InputManager.DeviceType.NETWORK, -1)
+		# Player picked a side in side_select → local input goes to that side,
+		# opponent's WebRTC input goes to the other side.
+		var local_side: int = GameManager.local_side  # 1=P1(left), 2=P2(right)
+		var remote_side: int = 2 if local_side == 1 else 1
+		# Get the local device (set by side_select)
+		var local_dev_type: int = GameManager.p1_device_type if local_side == 1 else GameManager.p2_device_type
+		var local_dev_id: int = GameManager.p1_device_id if local_side == 1 else GameManager.p2_device_id
+		# Assign: local device → chosen side, NETWORK → other side
+		InputManager.assign_device(local_side, local_dev_type, local_dev_id)
+		InputManager.assign_device(remote_side, InputManager.DeviceType.NETWORK, -1)
+		# Tell RollbackManager which slot is local so it reads/injects correctly
+		NetworkManager.local_player_id = local_side
+		NetworkManager.remote_player_id = remote_side
+		print("[FightScene] Online: local_side=%d dev_type=%d dev_id=%d | remote_side=%d=NETWORK" % [local_side, local_dev_type, local_dev_id, remote_side])
+		# NOW enter IN_GAME state — enables raw packet polling for input exchange
+		NetworkManager.start_game()
 		RollbackManager.input_delay = NetworkManager.input_delay
 		RollbackManager.start(fighter1, fighter2)
 
@@ -500,6 +514,8 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		if match_end_screen:
 			return
+		if GameManager.online_mode:
+			return  # No pause during online matches
 		if is_paused:
 			_destroy_overlay()
 			is_paused = false

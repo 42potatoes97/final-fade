@@ -11,6 +11,7 @@ signal connection_failed
 signal signaling_ready(room_id: String)
 
 var _cached_offer_payload: String = ""  # Cached for re-publishing
+var _cached_ice: Array = []  # Cache all ICE candidates for re-publishing after SDP exchange
 
 const STUN_CONFIG: Dictionary = {
 	"iceServers": [
@@ -34,6 +35,10 @@ func init(signal_client: SignalingClient) -> void:
 
 
 func create_host() -> WebRTCMultiplayerPeer:
+	# Guard: don't create a second host if one already exists
+	if rtc_multiplayer != null:
+		print("[WebRTC] Host already created, ignoring duplicate create_host()")
+		return rtc_multiplayer
 	is_host = true
 	room_id = _generate_room_id()
 
@@ -68,6 +73,10 @@ func create_host() -> WebRTCMultiplayerPeer:
 
 
 func create_client(code: String) -> WebRTCMultiplayerPeer:
+	# Guard: don't create a second client if one already exists
+	if rtc_multiplayer != null:
+		print("[WebRTC] Client already created, ignoring duplicate create_client()")
+		return rtc_multiplayer
 	is_host = false
 	room_id = code
 
@@ -124,6 +133,9 @@ func _on_ice_candidate(media: String, index: int, sdp_name: String) -> void:
 		"sdp": sdp_name,
 	})
 
+	# Cache for re-publishing after SDP exchange (race condition fix)
+	_cached_ice.append(payload)
+
 	var role := "host" if is_host else "client"
 	var topic := "finalfade/room/%s/ice/%s" % [room_id, role]
 	signaling.publish(topic, payload)
@@ -150,6 +162,8 @@ func _on_signaling_message(topic: String, payload: String) -> void:
 			print("[WebRTC] Received offer, setting remote description (answer auto-generated)...")
 			rtc_peer.set_remote_description(type, sdp)
 			# Answer is auto-generated via session_description_created signal
+			# Re-publish any cached client ICE after a short delay (answer publishes first)
+			_republish_ice_candidates()
 
 	elif topic.ends_with("/answer") and is_host:
 		var type: String = parsed.get("type", "")
@@ -157,6 +171,8 @@ func _on_signaling_message(topic: String, payload: String) -> void:
 		if type == "answer" and not sdp.is_empty():
 			print("[WebRTC] Received answer, connection establishing...")
 			rtc_peer.set_remote_description(type, sdp)
+			# Re-publish all cached host ICE candidates — client may have missed them
+			_republish_ice_candidates()
 
 	# Handle ICE candidates
 	elif "/ice/" in topic:
@@ -166,6 +182,16 @@ func _on_signaling_message(topic: String, payload: String) -> void:
 		if not media.is_empty() and not sdp.is_empty():
 			print("[WebRTC] Received ICE candidate")
 			rtc_peer.add_ice_candidate(media, index, sdp)
+
+
+func _republish_ice_candidates() -> void:
+	if _cached_ice.is_empty():
+		return
+	var role := "host" if is_host else "client"
+	var ice_topic := "finalfade/room/%s/ice/%s" % [room_id, role]
+	print("[WebRTC] Re-publishing %d cached ICE candidates" % _cached_ice.size())
+	for payload in _cached_ice:
+		signaling.publish(ice_topic, payload)
 
 
 # --- Utility ---
