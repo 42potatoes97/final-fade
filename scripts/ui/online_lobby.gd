@@ -1611,8 +1611,10 @@ func _on_host_pressed() -> void:
 		NetworkManager.host_with_code(port)
 		status_label.text = "Starting server... fetching room code"
 	elif NetworkManager.active_transport == "webrtc":
-		NetworkManager.host_game()
 		status_label.text = "Connecting to signaling broker..."
+		NetworkManager.host_game()
+		# host_game() may synchronously fire room_code_ready which updates
+		# status to "Waiting for opponent..." — don't overwrite it after
 	status_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.3))
 	_set_connection_state(LobbyState.HOSTING)
 
