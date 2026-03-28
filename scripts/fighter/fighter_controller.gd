@@ -326,7 +326,7 @@ func _register_offensive_exclusive(MoveScript) -> void:
 	d44.pushback_block = 1.5
 	d44.causes_knockdown = true
 	d44.forward_lunge = 0.0
-	d44.pose_name = "high_kick"
+	d44.pose_name = "d4_4_kick"
 	move_registry.register_move("d+4,4", d44)
 
 	# d+3,3: Double Slide — fast natural low string, second sweep KDs

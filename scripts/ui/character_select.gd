@@ -238,7 +238,7 @@ func _build_preview_viewport(parent: Control, pid: int) -> void:
 	var x_offset = -0.3 if pid == 0 else 0.3
 	var cam = Camera3D.new()
 	cam.position = Vector3(x_offset, 0.7, 4.0)
-	cam.look_at(Vector3(x_offset, 0.5, 0))
+	cam.look_at_from_position(cam.position, Vector3(x_offset, 0.5, 0))
 	cam.fov = 40
 	cam.current = true
 	vp.add_child(cam)

@@ -2,8 +2,12 @@ extends Node3D
 
 # Limb-based hit detection system
 # During active frames, checks the actual position of the attacking limb
-# against the opponent's body collision (capsule approximation)
+# against the opponent's body part spheres (per-bone hurtboxes)
 # Tight hitboxes — attacks only land when the model visually connects
+#
+# HIT_LENIENCY scales ALL sphere radii (hit + hurt) globally:
+#   1.0 = default, 1.2 = 20% more forgiving, 0.8 = 20% tighter
+const HIT_LENIENCY: float = 1.0
 
 # Which limb each attack uses and its hit properties
 var attack_data: Dictionary = {
@@ -20,6 +24,7 @@ var attack_data: Dictionary = {
 	"d_mid_punch": {"limb": "hand_r", "hit_level": "mid", "damage": 12, "hit_radius": 0.5, "max_range": 1.8},
 	# Offensive exclusive
 	"d4_kick": {"limbs": ["foot_r", "shin_r"], "hit_level": "low", "damage": 12, "hit_radius": 0.45, "max_range": 1.8},
+	"d4_4_kick": {"limbs": ["foot_l", "shin_l"], "hit_level": "high", "damage": 22, "hit_radius": 0.5, "max_range": 2.0},
 	"d4_4_power": {"limbs": ["foot_l", "shin_l"], "hit_level": "high", "damage": 22, "hit_radius": 0.5, "max_range": 2.0},
 	"d3_3_rising": {"limbs": ["foot_r", "shin_r"], "hit_level": "low", "damage": 20, "hit_radius": 0.5, "max_range": 2.0},
 	"high_kick_2": {"limbs": ["foot_r", "shin_r"], "hit_level": "high", "damage": 20, "hit_radius": 0.5, "max_range": 2.0},
@@ -234,7 +239,7 @@ func check_hit() -> Dictionary:
 				continue
 			var part_pos: Vector3 = part_joint.global_position
 			var part_radius: float = BODY_PART_SPHERES[part_name]["radius"]
-			var combined_radius: float = hit_radius + part_radius
+			var combined_radius: float = (hit_radius + part_radius) * HIT_LENIENCY
 			var dist: float = atk_pos.distance_to(part_pos)
 
 			if dist <= combined_radius:

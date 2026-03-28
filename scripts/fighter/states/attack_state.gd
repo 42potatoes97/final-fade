@@ -130,6 +130,8 @@ func tick(_delta: float) -> String:
 				m.set_pose_df_mid_check(progress)
 			"d4_kick":
 				m.set_pose_d4_kick(progress)
+			"d4_4_kick":
+				m.set_pose_d4_4_kick(progress)
 			"d3_3_rising":
 				m.set_pose_d3_3_rising(progress)
 

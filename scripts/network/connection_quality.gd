@@ -108,7 +108,31 @@ func update_metrics() -> void:
 
 
 func get_recommended_delay() -> int:
-	return clampi(ceili(current_ping_ms / 16.67), 1, 5)
+	# One-way latency = RTT / 2; divide by frame duration to get frames needed
+	return clampi(ceili(current_ping_ms / 2.0 / 16.67), 1, 4)
+
+
+# --- RPC-based ping helpers (used instead of raw put_packet during IN_GAME) ---
+
+func create_ping_data() -> Dictionary:
+	var seq: int = _next_seq
+	_next_seq = (_next_seq + 1) % 65536
+	_expected_count += 1
+	var ts: int = Time.get_ticks_msec()
+	_sent_pings[seq] = ts
+	return {"seq": seq, "timestamp": ts}
+
+
+func process_pong_data(seq: int, sent_timestamp: int) -> void:
+	if not _sent_pings.has(seq):
+		return
+	_sent_pings.erase(seq)
+	_received_count += 1
+	var rtt: float = float(Time.get_ticks_msec() - sent_timestamp)
+	ping_history.append(rtt)
+	if ping_history.size() > HISTORY_SIZE:
+		ping_history.pop_front()
+	update_metrics()
 
 
 # --- Packet Identification ---

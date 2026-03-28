@@ -80,7 +80,7 @@ var lb_refresh_btn: Button
 var _matchmaking: MatchmakingQueue = null
 var _leaderboard_mgr: LeaderboardManager = null
 var _ranked_config: RankedConfig = null
-var _lobby: LobbyDiscovery = null
+var _lobby = null  # FirebaseLobby instance
 
 
 func _ready() -> void:
@@ -243,6 +243,8 @@ func _switch_tab(tab_name: String) -> void:
 		var cached = _leaderboard_mgr.get_cached_entries()
 		if cached and cached.size() > 0:
 			_on_leaderboard_updated(cached)
+	if tab_name == "lobbies" and _profile_set and not _lobby_browsing:
+		_on_lobby_connect_pressed()
 
 
 func _update_tab_availability() -> void:
@@ -690,18 +692,9 @@ func _on_lobby_connect_pressed() -> void:
 	if not _lobby.lobby_disconnected.is_connected(_on_lobby_disconnected):
 		_lobby.lobby_disconnected.connect(_on_lobby_disconnected)
 
-	# Must wait for broker connection before subscribing
-	var signaling: SignalingClient = NetworkManager.get_signaling()
-	if signaling.is_connected_to_broker():
-		_lobby.start_browsing()
-	else:
-		signaling.connected.connect(_on_broker_connected_for_lobby, CONNECT_ONE_SHOT)
-		signaling.connect_to_broker()
-
-
-func _on_broker_connected_for_lobby() -> void:
-	if _lobby:
-		_lobby.start_browsing()
+	# Firebase lobby doesn't need signaling — start browsing immediately
+	_lobby.start_browsing()
+	_on_lobby_connected()
 
 
 func _on_lobby_create_pressed() -> void:
@@ -738,9 +731,10 @@ func _on_lobby_room_code_ready(code: String) -> void:
 func _on_lobby_refresh_pressed() -> void:
 	_clear_room_list()
 	if _lobby:
+		_lobby.rooms.clear()
 		_lobby.start_browsing()
-	lobby_status_label.text = "Refreshing..."
-	lobby_status_label.add_theme_color_override("font_color", Color(0.8, 0.8, 0.3))
+	# Status will update on next poll via _update_lobby_status()
+	_update_lobby_status()
 
 
 func _on_lobby_connected() -> void:
@@ -945,6 +939,7 @@ func _on_broker_connected_for_quick():
 func _start_quick_matchmaking(signaling: SignalingClient):
 	# Always create fresh queue to ensure correct signal wiring
 	if _matchmaking != null:
+		_matchmaking.cleanup_after_match()
 		_matchmaking.leave_queue()
 	_matchmaking = MatchmakingQueue.new()
 	_matchmaking.init(signaling)
@@ -1525,6 +1520,9 @@ func _on_ranked_connected():
 	ranked_status_label.add_theme_color_override("font_color", Color(0.2, 1.0, 0.3))
 	# Brief delay then start match
 	get_tree().create_timer(1.0).timeout.connect(func():
+		# Ranked auto-starts both sides — remove the direct-connect handler to prevent double-navigation
+		if NetworkManager.game_started.is_connected(_on_host_started_game):
+			NetworkManager.game_started.disconnect(_on_host_started_game)
 		NetworkManager.start_game()
 		NetworkManager.notify_game_start()
 		get_tree().change_scene_to_file("res://scenes/ui/side_select.tscn")
@@ -1719,6 +1717,9 @@ func _on_connected() -> void:
 			_lobby.announce_room(_lobby._hosting_room)
 	else:
 		status_label.text = "Connected! Waiting for host to start..."
+		# Listen for host pressing Start — client must navigate to side_select too
+		if not NetworkManager.game_started.is_connected(_on_host_started_game):
+			NetworkManager.game_started.connect(_on_host_started_game, CONNECT_ONE_SHOT)
 
 
 func _on_disconnected() -> void:
@@ -1747,6 +1748,14 @@ func _on_auth_failed(reason: String) -> void:
 # =============================================================================
 #  START MATCH / NAVIGATION
 # =============================================================================
+
+func _on_host_started_game() -> void:
+	# Called on the client side when the host presses Start Match
+	GameManager.online_mode = true
+	GameManager.ai_mode = false
+	GameManager.training_mode = false
+	get_tree().change_scene_to_file("res://scenes/ui/side_select.tscn")
+
 
 func _on_start_pressed() -> void:
 	GameManager.online_mode = true
@@ -1778,20 +1787,12 @@ func _input(event: InputEvent) -> void:
 #  PROCESS (lobby tick + matchmaking tick)
 # =============================================================================
 
-var _lobby_refresh_timer: float = 0.0
-const LOBBY_REFRESH_INTERVAL: float = 10.0  # Re-subscribe every 10s to catch missed rooms
+# (Firebase lobby handles its own polling internally)
 
 func _process(delta):
-	# Tick lobby discovery for heartbeats and stale cleanup
+	# Tick lobby discovery for heartbeats, polling, and stale cleanup
 	if _lobby_browsing and _lobby:
 		_lobby.tick(delta)
-		# Periodic re-subscribe to ensure we catch all rooms
-		_lobby_refresh_timer += delta
-		if _lobby_refresh_timer >= LOBBY_REFRESH_INTERVAL:
-			_lobby_refresh_timer = 0.0
-			var sig: SignalingClient = NetworkManager.get_signaling()
-			if sig.is_connected_to_broker():
-				_lobby.start_browsing()
 
 	# Tick matchmaking queue
 	if _matchmaking and _matchmaking.is_in_queue():

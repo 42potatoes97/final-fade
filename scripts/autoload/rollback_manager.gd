@@ -36,9 +36,16 @@ var remote_input_history: Dictionary = {}  # frame -> input_bits (confirmed)
 var remote_input_predicted: Dictionary = {} # frame -> input_bits (what we guessed)
 var last_confirmed_remote_frame: int = -1
 var _needs_mismatch_check: bool = false  # Set when new remote inputs arrive
-var auto_delay_enabled: bool = false  # Auto-adjust input_delay from ping
+var auto_delay_enabled: bool = true  # Auto-adjust input_delay from ping
 var _ping_timer: float = 0.0
 const PING_INTERVAL: float = 0.5  # Send ping every 500ms
+
+# Debug / adaptive-delay metrics (read by fight_scene debug HUD)
+var rollback_count: int = 0   # Total rollbacks this match
+var stall_count: int = 0      # Total stall (freeze) frames this match
+var _rollback_window_count: int = 0   # Rollbacks in the last ROLLBACK_WINDOW_SEC
+var _rollback_window_timer: float = 0.0
+const ROLLBACK_WINDOW_SEC: float = 1.0
 var replay_manager = null  # ReplayManager, set by fight_scene for ranked
 var anticheat = null  # AnticheatValidator, set by fight_scene for ranked
 
@@ -75,6 +82,12 @@ func start(f1: CharacterBody3D, f2: CharacterBody3D) -> void:
 		_local_id = _network.local_player_id
 	else:
 		_local_id = 1
+
+	# Reset debug/adaptive counters
+	rollback_count = 0
+	stall_count = 0
+	_rollback_window_count = 0
+	_rollback_window_timer = 0.0
 
 	# Take initial snapshot
 	_save_snapshot(0)
@@ -114,6 +127,8 @@ func network_tick() -> void:
 			var min_frame: int = maxi(rollback_frame, current_frame - max_rollback_frames)
 			# 4. ROLLBACK — load snapshot, skip if not available
 			if _load_snapshot(min_frame):
+				rollback_count += 1
+				_rollback_window_count += 1
 				# 5. Re-simulate from rollback_frame to current_frame
 				is_resimulating = true
 				for f in range(min_frame, current_frame):
@@ -125,6 +140,7 @@ func network_tick() -> void:
 
 	# 6. Check if we're too far ahead — freeze if necessary
 	if _should_freeze():
+		stall_count += 1
 		return  # Don't advance, wait for remote
 
 	# 7. Simulate current frame
@@ -155,17 +171,38 @@ func network_tick() -> void:
 
 	# 10. Periodic ping for connection quality + auto delay
 	_ping_timer += fixed_delta
+	_rollback_window_timer += fixed_delta
+
 	if _ping_timer >= PING_INTERVAL:
 		_ping_timer = 0.0
 		if _network:
 			_network.send_ping()
 			if auto_delay_enabled:
 				var quality: ConnectionQuality = _network.get_quality()
-				var recommended: int = quality.get_recommended_delay()
-				# Cap auto-delay so it doesn't exceed rollback budget
-				recommended = mini(recommended, max_rollback_frames - 2)
-				if recommended != input_delay:
-					input_delay = maxi(recommended, 1)
+
+				# Adaptive pressure: if too many rollbacks in the past second, bump delay up.
+				# This fires on the second PING_INTERVAL tick after the window fills (~1s).
+				if _rollback_window_timer >= ROLLBACK_WINDOW_SEC:
+					if _rollback_window_count > 3:
+						var pressure: int = clampi(input_delay + 1, 1, max_rollback_frames - 2)
+						if pressure != input_delay:
+							input_delay = pressure
+							if _network.is_host:
+								_network.send_input_delay_sync(input_delay)
+					_rollback_window_count = 0
+					_rollback_window_timer = 0.0
+
+				# Only auto-adjust delay once we have enough ping samples (prevents
+				# premature reduction to delay=1 at match start before ping is known).
+				if quality.ping_history.size() >= 3:
+					var recommended: int = quality.get_recommended_delay()
+					# Cap auto-delay so it doesn't exceed rollback budget
+					recommended = clampi(recommended, 1, max_rollback_frames - 2)
+					if recommended != input_delay:
+						input_delay = recommended
+						# Host is the authority on delay — broadcast to client
+						if _network.is_host:
+							_network.send_input_delay_sync(input_delay)
 
 	# 11. Update dynamic rollback budget from measured frame time
 	var tick_end_ms: float = Time.get_ticks_msec()
@@ -194,7 +231,15 @@ func _get_input(player_id: int, frame: int) -> int:
 
 
 func _predict_remote_input(_frame: int) -> int:
-	# Simple prediction: repeat last confirmed input
+	# Smart prediction: in states where no new input can take effect (hitstun,
+	# knockdown, blockstun, getup recovery), predict neutral (0).  This is
+	# almost always correct and avoids rollbacks during forced animation.
+	var remote_fighter: CharacterBody3D = fighter2 if _local_id == 1 else fighter1
+	if remote_fighter != null and remote_fighter.state_machine != null:
+		var state_name: String = remote_fighter.state_machine.get_current_state_name()
+		if state_name in ["Hitstun", "Blockstun", "Knockdown", "Getup", "GetupKick", "SideRoll"]:
+			return 0  # Input buffered but no new move can start — predict neutral
+	# Default: repeat last confirmed input (momentum prediction)
 	if last_confirmed_remote_frame >= 0:
 		return remote_input_history.get(last_confirmed_remote_frame, 0)
 	return 0

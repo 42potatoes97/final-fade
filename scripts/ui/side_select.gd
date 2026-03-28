@@ -23,6 +23,10 @@ var _online_opp_ready: bool = false
 var _online_local_side: int = 0
 var _online_local_idx: int = -1
 var _online_opp_side: int = 0
+var _online_claimed_device: int = -1  # Index of device that confirmed first; -1 = unclaimed
+
+# Event-based input tracking for online mode (window-focused, not global polled state)
+var _joy_prev_axis: Dictionary = {}  # device_id -> last axis_value for JOY_AXIS_LEFT_X
 
 # AI difficulty selection
 var ai_difficulty_phase: bool = false  # True when picking CPU difficulty
@@ -227,6 +231,10 @@ func _physics_process(_delta: float) -> void:
 		if input_cooldown[key] > 0:
 			input_cooldown[key] -= 1
 
+	# Online mode: navigation is event-based in _input() to avoid cross-instance polling
+	if GameManager.online_mode:
+		return
+
 	# AI difficulty selection phase — human device picks difficulty
 	if ai_difficulty_phase and ai_human_dev_idx >= 0:
 		var hdev = devices[ai_human_dev_idx]
@@ -261,6 +269,12 @@ func _physics_process(_delta: float) -> void:
 		var dev = devices[i]
 		var dev_key = str(dev.type) + "_" + str(dev.id)
 
+		# Online: after any device confirms (claimed), lock all others out.
+		# Claim is set on CONFIRM press — not on navigation — so keyboard/gamepad
+		# confirm buttons (SPACE vs JOY_BUTTON_X) don't cross-trigger between instances.
+		if GameManager.online_mode and _online_claimed_device >= 0 and i != _online_claimed_device:
+			continue
+
 		if input_cooldown.get(dev_key, 0) > 0:
 			continue
 
@@ -274,21 +288,19 @@ func _physics_process(_delta: float) -> void:
 			# Already confirmed — only allow un-confirm with confirm button
 			if input.confirm:
 				dev.confirmed = false
+				if GameManager.online_mode:
+					_online_claimed_device = -1  # Release claim so player can re-pick
 				changed = true
 		else:
 			if input.left and dev.side != 1:
 				# Move to P1 side
-				if GameManager.online_mode:
-					_kick_all_others(i)  # Only one device active in online
-				elif _side_occupied(1):
+				if not GameManager.online_mode and _side_occupied(1):
 					continue  # Offline: block if occupied
 				dev.side = 1
 				changed = true
 			elif input.right and dev.side != 2:
 				# Move to P2 side
-				if GameManager.online_mode:
-					_kick_all_others(i)
-				elif _side_occupied(2):
+				if not GameManager.online_mode and _side_occupied(2):
 					continue  # Offline: block if occupied
 				dev.side = 2
 				changed = true
@@ -296,23 +308,21 @@ func _physics_process(_delta: float) -> void:
 				# Already on this side, pressing same direction = go back to center
 				pass
 			elif input.confirm and dev.side != 0:
-				# Confirm side
+				# Confirm side — claim this device for the rest of the online session
 				dev.confirmed = true
+				if GameManager.online_mode:
+					_online_claimed_device = i
 				changed = true
 			# Allow moving back to center by pressing opposite of current side
 			if not changed and dev.side == 1 and input.right:
-				if GameManager.online_mode:
-					_kick_all_others(i)
-				elif _side_occupied(2):
+				if not GameManager.online_mode and _side_occupied(2):
 					dev.side = 0
 					changed = true
 					continue
 				dev.side = 2
 				changed = true
 			elif not changed and dev.side == 2 and input.left:
-				if GameManager.online_mode:
-					_kick_all_others(i)
-				elif _side_occupied(1):
+				if not GameManager.online_mode and _side_occupied(1):
 					dev.side = 0
 					changed = true
 					continue
@@ -481,6 +491,9 @@ func _save_and_proceed_online(local_idx: int, local_side: int) -> void:
 	var local_dev = devices[local_idx]
 	var remote_side: int = 2 if local_side == 1 else 1
 
+	# Tell GameManager which side the local player is — used throughout character select, fight, etc.
+	GameManager.local_side = local_side
+
 	# Local player gets their chosen side
 	if local_side == 1:
 		GameManager.p1_device_type = local_dev.type
@@ -561,7 +574,101 @@ func _update_difficulty_display() -> void:
 	info_label.text = "◀  " + AI_DIFFICULTIES[ai_difficulty_idx].name + "  ▶"
 
 
+func _handle_online_side_event(event: InputEvent) -> void:
+	# Determine device and direction from the incoming event
+	# Keyboard events are window-focused by Godot, but joypad events fire globally
+	# across all instances — only process joypad input when our window has focus
+	if (event is InputEventJoypadButton or event is InputEventJoypadMotion) and not get_window().has_focus():
+		return
+
+	var ev_left := false
+	var ev_right := false
+	var ev_confirm := false
+	var ev_dev_type := -1
+	var ev_dev_id := -1
+
+	if event is InputEventKey and event.pressed and not event.echo:
+		ev_dev_type = InputManager.DeviceType.KEYBOARD
+		ev_dev_id = -1
+		match event.keycode:
+			KEY_A, KEY_LEFT:
+				ev_left = true
+			KEY_D, KEY_RIGHT:
+				ev_right = true
+			KEY_U, KEY_SPACE, KEY_ENTER, KEY_KP_4:
+				ev_confirm = true
+	elif event is InputEventJoypadButton and event.pressed:
+		ev_dev_type = InputManager.DeviceType.GAMEPAD
+		ev_dev_id = event.device
+		match event.button_index:
+			JOY_BUTTON_DPAD_LEFT:
+				ev_left = true
+			JOY_BUTTON_DPAD_RIGHT:
+				ev_right = true
+			JOY_BUTTON_X:
+				ev_confirm = true
+	elif event is InputEventJoypadMotion and event.axis == JOY_AXIS_LEFT_X:
+		var prev: float = _joy_prev_axis.get(event.device, 0.0)
+		var cur: float = event.axis_value
+		_joy_prev_axis[event.device] = cur
+		if cur > 0.5 and prev <= 0.5:
+			ev_dev_type = InputManager.DeviceType.GAMEPAD
+			ev_dev_id = event.device
+			ev_right = true
+		elif cur < -0.5 and prev >= -0.5:
+			ev_dev_type = InputManager.DeviceType.GAMEPAD
+			ev_dev_id = event.device
+			ev_left = true
+
+	if ev_dev_type < 0 or (not ev_left and not ev_right and not ev_confirm):
+		return
+
+	# Find matching device in our local list
+	var dev_idx := -1
+	for i in range(devices.size()):
+		if devices[i].type == ev_dev_type and devices[i].id == ev_dev_id:
+			dev_idx = i
+			break
+	if dev_idx < 0:
+		return
+
+	# After a device claims this instance, block all others
+	if _online_claimed_device >= 0 and dev_idx != _online_claimed_device:
+		return
+
+	var dev = devices[dev_idx]
+	var dev_key = str(dev.type) + "_" + str(dev.id)
+	if input_cooldown.get(dev_key, 0) > 0:
+		return
+
+	var changed := false
+
+	if dev.confirmed:
+		if ev_confirm:
+			dev.confirmed = false
+			_online_claimed_device = -1
+			changed = true
+	else:
+		if ev_left and dev.side != 1:
+			dev.side = 1
+			changed = true
+		elif ev_right and dev.side != 2:
+			dev.side = 2
+			changed = true
+		elif ev_confirm and dev.side != 0:
+			dev.confirmed = true
+			_online_claimed_device = dev_idx
+			changed = true
+
+	if changed:
+		input_cooldown[dev_key] = COOLDOWN_FRAMES
+		_update_all_display()
+		_check_ready()
+
+
 func _input(event: InputEvent) -> void:
+	if GameManager.online_mode and not proceeding:
+		_handle_online_side_event(event)
 	if InputManager.is_back_event(event):
 		if ai_difficulty_phase:
 			# Back out of difficulty selection

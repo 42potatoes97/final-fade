@@ -649,41 +649,33 @@ func set_pose_power_straight(progress: float) -> void:
 
 func set_pose_df_mid_check(progress: float) -> void:
 	# df+1: Body cross mid check — quick level punch to the chest/gut
-	# Like a boxer's body jab — compact, horizontal, slight crouch
+	# Phases: startup (0-0.35) → active/peak (0.35-0.55) → recover (0.55-1.0)
 	idle_bob_active = false
 	blend_speed = 45.0
 
-	var p = sin(progress * PI)
-	# Deeper crouch — just barely still gets hit by highs
-	var crouch = p * 1.0
+	var stance = _get_stance_pose()
+	var peak_pose = {
+		"root": Vector3(-1, -41, 3),
+		"abdomen": Vector3(-46, -47, -2),
+		"torso": Vector3(44, 4, 0), "head": Vector3(0, 13, -1),
+		"arm_l": Vector3(-38, 5, 73), "forearm_l": Vector3(1, 86, 48),
+		"arm_r": Vector3(-8, -11, -50), "forearm_r": Vector3(-20, -95, 76),
+		"leg_l": Vector3(-30, -59, -4), "shin_l": Vector3(69, 7, -8),
+		"foot_l": Vector3(-42, 3, 4),
+		"leg_r": Vector3(-36, -17, 0), "shin_r": Vector3(63, 0, 0),
+		"foot_r": Vector3(-26, 0, 0),
+	}
 
-	# Punching arm (arm_r = viewer LEFT) — straight forward at chest level
-	# Key: arm stays LEVEL (not angled down), forearm extends straight out
-	var punch_arm = STANCE_ARM_R.lerp(Vector3(-89, -38, -50), p)
-	var punch_farm = STANCE_FARM_R.lerp(Vector3(-8, -15, 6), p)
-
-	# Guard arm pulls in tighter
-	var guard_arm = STANCE_ARM_L + Vector3(p * 8, 0, p * -5)
-	var guard_farm = STANCE_FARM_L + Vector3(0, p * 10, 0)
-
-	_set_pose({
-		# Slight forward lean + torso rotation into the punch
-		"abdomen": Vector3(crouch * 12, p * -10, 0),
-		"torso": Vector3(2 + crouch * 8, p * -25, 0),
-		"head": Vector3(0, p * -5, -1),
-		# Arms
-		"arm_l": guard_arm,
-		"forearm_l": guard_farm,
-		"arm_r": punch_arm,
-		"forearm_r": punch_farm,
-		# Legs — deep knee bend to get low
-		"leg_l": STANCE_LEG_L + Vector3(crouch * -25, 0, 0),
-		"shin_l": STANCE_SHIN_L + Vector3(crouch * 40, 0, 0),
-		"foot_l": Vector3(crouch * -8, 0, 0),
-		"leg_r": STANCE_LEG_R + Vector3(crouch * -20, 0, 0),
-		"shin_r": STANCE_SHIN_R + Vector3(crouch * 30, 0, 0),
-		"foot_r": Vector3(-1, 0, 0),
-	}, Vector3(0, crouch * -0.15, 0))
+	var pose: Dictionary
+	if progress < 0.35:
+		var t = sin(clampf(progress / 0.35, 0.0, 1.0) * PI * 0.5)
+		pose = _lerp_poses(stance, peak_pose, t)
+	elif progress < 0.55:
+		pose = peak_pose
+	else:
+		var t = sin(clampf((progress - 0.55) / 0.45, 0.0, 1.0) * PI * 0.5)
+		pose = _lerp_poses(peak_pose, stance, t)
+	_set_pose(pose)
 
 
 func set_pose_outward_backfist(progress: float) -> void:
@@ -810,7 +802,7 @@ func set_pose_high_kick(progress: float) -> void:
 
 	var stance = _get_stance_pose()
 
-	# Keyframe poses
+	# Keyframe poses (original roundhouse for regular 4,4)
 	var windup_pose = {
 		"abdomen": Vector3(0, 48, -38),
 		"torso": Vector3(3, -1, -1),
@@ -989,34 +981,34 @@ func set_pose_d_mid_punch(progress: float) -> void:
 	var inter1_root = Vector3(0, 0, 0)
 
 	var inter2 = {
-		"abdomen": Vector3(-19, 0, 0),
-		"torso": Vector3(27, -18, 0), "head": Vector3(0, -1, -1),
-		"arm_l": Vector3(-56, -14, 44), "forearm_l": Vector3(24, 107, 44),
-		"arm_r": Vector3(-29, -32, -73), "forearm_r": Vector3(6, -66, 0),
-		"leg_l": Vector3(-36, -3, 0), "shin_l": Vector3(83, 13, -6), "foot_l": Vector3(-30, 0, 0),
-		"leg_r": Vector3(-53, 16, 1), "shin_r": Vector3(85, 11, 0), "foot_r": Vector3(-27, 0, 0),
+		"abdomen": Vector3(19, -23, 0),
+		"torso": Vector3(14, -2, 0), "head": Vector3(0, 14, -1),
+		"arm_l": Vector3(-83, -71, 79), "forearm_l": Vector3(-47, -32, 68),
+		"arm_r": Vector3(-64, -33, -72), "forearm_r": Vector3(-12, -66, 0),
+		"leg_l": Vector3(-40, -45, 0), "shin_l": Vector3(59, 4, -15), "foot_l": Vector3(-11, -49, 31),
+		"leg_r": Vector3(-52, -3, 0), "shin_r": Vector3(63, 0, 0), "foot_r": Vector3(-7, 0, 0),
 	}
-	var inter2_root = Vector3(0, -0.14, 0)
+	var inter2_root = Vector3.ZERO
 
 	var impact = {
-		"abdomen": Vector3(-19, 0, 0),
-		"torso": Vector3(27, 36, 0), "head": Vector3(0, -1, -1),
-		"arm_l": Vector3(-56, -14, 44), "forearm_l": Vector3(24, 107, 44),
-		"arm_r": Vector3(-29, -32, -73), "forearm_r": Vector3(6, -66, 0),
-		"leg_l": Vector3(-19, -17, 0), "shin_l": Vector3(85, 46, 26), "foot_l": Vector3(-30, 0, 0),
-		"leg_r": Vector3(-61, -7, 1), "shin_r": Vector3(78, 11, 0), "foot_r": Vector3(-27, 0, 0),
+		"abdomen": Vector3(19, 14, 0),
+		"torso": Vector3(14, 46, 0), "head": Vector3(0, 14, -1),
+		"arm_l": Vector3(-83, -71, 79), "forearm_l": Vector3(-47, -32, 68),
+		"arm_r": Vector3(-64, -33, -72), "forearm_r": Vector3(-12, -66, 0),
+		"leg_l": Vector3(-40, -45, 0), "shin_l": Vector3(59, 4, -15), "foot_l": Vector3(-11, -49, 31),
+		"leg_r": Vector3(-52, -3, 0), "shin_r": Vector3(63, 0, 0), "foot_r": Vector3(-7, 0, 0),
 	}
-	var impact_root = Vector3(0, -0.17, 0)
+	var impact_root = Vector3.ZERO
 
 	var follow = {
-		"abdomen": Vector3(-19, 0, 0),
-		"torso": Vector3(27, 61, 0), "head": Vector3(0, -1, -1),
-		"arm_l": Vector3(-56, -14, 44), "forearm_l": Vector3(24, 107, 44),
-		"arm_r": Vector3(-29, -32, -73), "forearm_r": Vector3(6, -66, 0),
-		"leg_l": Vector3(-19, -17, 0), "shin_l": Vector3(85, 46, 26), "foot_l": Vector3(-30, 0, 0),
-		"leg_r": Vector3(-61, -7, 1), "shin_r": Vector3(78, 11, 0), "foot_r": Vector3(-27, 0, 0),
+		"abdomen": Vector3(19, -9, 0),
+		"torso": Vector3(32, 112, 0), "head": Vector3(0, 14, -1),
+		"arm_l": Vector3(-116, -71, 79), "forearm_l": Vector3(-47, -32, 68),
+		"arm_r": Vector3(-64, -33, -72), "forearm_r": Vector3(-12, -66, 0),
+		"leg_l": Vector3(-40, -45, 0), "shin_l": Vector3(59, 4, -15), "foot_l": Vector3(-11, -49, 31),
+		"leg_r": Vector3(-52, -3, 0), "shin_r": Vector3(63, 0, 0), "foot_r": Vector3(-7, 0, 0),
 	}
-	var follow_root = Vector3(0, -0.17, 0)
+	var follow_root = Vector3.ZERO
 
 	var recovery = {
 		"abdomen": Vector3(-10, -8, 0),
@@ -1063,37 +1055,86 @@ func set_pose_d_mid_punch(progress: float) -> void:
 
 
 func set_pose_d4_kick(progress: float) -> void:
-	# d+4: Quick crouching low kick — offensive class poke
-	# Crouches slightly, quick kick at shin level from back leg
+	# d+4: Crouching heel kick — offensive class poke
+	# Phases: startup (0-0.3) → active impact (0.3-0.55) → recover (0.55-1.0)
 	idle_bob_active = false
 	blend_speed = 45.0
 	var stance = _get_stance_pose()
 
-	# Keyframes: crouch → kick extend → recover
-	var startup_t = clampf(progress / 0.3, 0.0, 1.0)
-	var active_t = clampf((progress - 0.3) / 0.3, 0.0, 1.0)
-	var recover_t = clampf((progress - 0.6) / 0.4, 0.0, 1.0)
-	var s = sin(startup_t * PI * 0.5)
-	var a = sin(active_t * PI * 0.5)
-	var r = sin(recover_t * PI * 0.5)
-
-	var crouch_pose = {
-		"abdomen": Vector3(s * -10, 0, 0),
-		"torso": Vector3(s * 15, s * -10, 0),
-		"head": Vector3(0, -1, -1),
-		"arm_l": stance.get("arm_l", STANCE_ARM_L) + Vector3(s * 10, 0, s * 5),
-		"forearm_l": stance.get("forearm_l", STANCE_FARM_L),
-		"arm_r": stance.get("arm_r", STANCE_ARM_R) + Vector3(s * 15, 0, s * -5),
-		"forearm_r": stance.get("forearm_r", STANCE_FARM_R),
-		# Plant leg bends (viewer right = leg_l)
-		"leg_l": STANCE_LEG_L + Vector3(s * -20, 0, 0),
-		"shin_l": STANCE_SHIN_L + Vector3(s * 30, 0, 0),
-		# Kicking leg extends low (viewer left = leg_r)
-		"leg_r": STANCE_LEG_R + Vector3(a * -15 * (1.0 - r), a * -30 * (1.0 - r), 0),
-		"shin_r": STANCE_SHIN_R + Vector3(a * -20 * (1.0 - r), 0, 0),
-		"foot_r": Vector3(a * -15 * (1.0 - r), 0, 0),
+	var impact_pose = {
+		"root": Vector3(0, 0, 1),
+		"abdomen": Vector3(10, -59, 36),
+		"torso": Vector3(2, 0, 0),
+		"head": Vector3(0, -3, -2),
+		"arm_l": Vector3(-50, 5, 73),
+		"forearm_l": Vector3(-4, 92, 51),
+		"arm_r": Vector3(-46, -10, -75),
+		"forearm_r": Vector3(-16, -51, -57),
+		"leg_l": Vector3(-9, -81, 0),
+		"shin_l": Vector3(32, 4, -6),
+		"foot_l": Vector3(-24, -11, 5),
+		"leg_r": Vector3(-1, -97, 69),
+		"shin_r": Vector3(5, 0, 0),
+		"foot_r": Vector3(-1, 0, 0),
 	}
-	_set_pose(crouch_pose, Vector3(0, s * -0.1, 0))
+
+	var pose: Dictionary
+	if progress < 0.3:
+		# Startup: stance → impact
+		var t = sin(clampf(progress / 0.3, 0.0, 1.0) * PI * 0.5)
+		pose = _lerp_poses(stance, impact_pose, t)
+	elif progress < 0.55:
+		# Active: hold at impact
+		pose = impact_pose
+	else:
+		# Recover: impact → stance
+		var t = sin(clampf((progress - 0.55) / 0.45, 0.0, 1.0) * PI * 0.5)
+		pose = _lerp_poses(impact_pose, stance, t)
+
+	_set_pose(pose)
+
+
+func set_pose_d4_4_kick(progress: float) -> void:
+	# d+4,4: Power RH follow — offense class low→high string second hit
+	# Phases: startup/windup (0-0.3) → active impact (0.3-0.5) → recover (0.5-1.0)
+	idle_bob_active = false
+	blend_speed = 38.0
+	var stance = _get_stance_pose()
+
+	var windup_pose = {
+		"root": Vector3(0, 0, 1),
+		"abdomen": Vector3(-5, -72, 29),
+		"torso": Vector3(2, 0, 0), "head": Vector3(0, -3, -2),
+		"arm_l": Vector3(-50, 5, 73), "forearm_l": Vector3(-4, 92, 51),
+		"arm_r": Vector3(-46, -10, -75), "forearm_r": Vector3(-16, -51, -57),
+		"leg_l": Vector3(-9, -80, 0), "shin_l": Vector3(32, 4, -6),
+		"foot_l": Vector3(-24, -4, 5),
+		"leg_r": Vector3(4, -104, 65), "shin_r": Vector3(30, 0, 0),
+		"foot_r": Vector3(-1, 0, 0),
+	}
+	var impact_pose = {
+		"root": Vector3(0, 0, 1),
+		"abdomen": Vector3(3, -59, 51),
+		"torso": Vector3(2, 0, 0), "head": Vector3(0, -3, -2),
+		"arm_l": Vector3(-50, 5, 73), "forearm_l": Vector3(-4, 92, 51),
+		"arm_r": Vector3(-46, -10, -75), "forearm_r": Vector3(-16, -51, -57),
+		"leg_l": Vector3(-5, -81, 0), "shin_l": Vector3(9, 4, -6),
+		"foot_l": Vector3(-24, -11, 5),
+		"leg_r": Vector3(-4, -96, 103), "shin_r": Vector3(5, 0, 0),
+		"foot_r": Vector3(-1, 0, 0),
+	}
+
+	var pose: Dictionary
+	if progress < 0.3:
+		var t = sin(clampf(progress / 0.3, 0.0, 1.0) * PI * 0.5)
+		pose = _lerp_poses(stance, windup_pose, t)
+	elif progress < 0.5:
+		var t = sin(clampf((progress - 0.3) / 0.2, 0.0, 1.0) * PI * 0.5)
+		pose = _lerp_poses(windup_pose, impact_pose, t)
+	else:
+		var t = sin(clampf((progress - 0.5) / 0.5, 0.0, 1.0) * PI * 0.5)
+		pose = _lerp_poses(impact_pose, stance, t)
+	_set_pose(pose)
 
 
 func set_pose_d3_3_rising(progress: float) -> void:

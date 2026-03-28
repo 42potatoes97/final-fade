@@ -14,15 +14,22 @@ const KEEPALIVE_SEC: float = 30.0
 
 var _ws: WebSocketPeer
 var _connected: bool = false
+var _connecting: bool = false     # True while WebSocket handshake + MQTT CONNECT is in flight
 var _connect_sent: bool = false  # Prevent re-sending MQTT CONNECT every frame
 var _subscriptions: Dictionary = {}
 var _keepalive_timer: float = 0.0
 var _packet_id_counter: int = 1
+var _auto_reconnect: bool = true   # Reconnect automatically when dropped
+var _reconnect_timer: float = 0.0
+const RECONNECT_DELAY: float = 1.0  # Seconds before reconnect attempt
 
 
 func connect_to_broker() -> void:
-	if _connected:
-		return  # Already connected
+	if _connected or _connecting:
+		return  # Already connected or in-flight — don't orphan the first attempt
+	_auto_reconnect = true  # Re-enable auto-reconnect on any explicit connect call
+	_reconnect_timer = 0.0
+	_connecting = true
 	_connect_sent = false
 	_ws = WebSocketPeer.new()
 	_ws.supported_protocols = PackedStringArray(["mqtt"])
@@ -42,20 +49,23 @@ func is_connected_to_broker() -> bool:
 
 
 func disconnect_from_broker() -> void:
+	_auto_reconnect = false  # Intentional disconnect — don't auto-reconnect
+	_reconnect_timer = 0.0
 	if _ws == null:
 		return
 	if _connected:
 		_ws.put_packet(_build_disconnect_packet())
 		_connected = false
 		disconnected.emit()
+	_connecting = false
 	_ws.close()
 
 
 func subscribe(topic: String) -> void:
+	_subscriptions[topic] = true  # Always store — replayed on reconnect
 	if not _connected:
-		push_warning("SignalingClient: Cannot subscribe, not connected")
+		push_warning("SignalingClient: Cannot subscribe yet, not connected — will retry on reconnect")
 		return
-	_subscriptions[topic] = true
 	var pkt := _build_subscribe_packet(topic, _next_packet_id())
 	_ws.put_packet(pkt)
 
@@ -69,7 +79,13 @@ func publish(topic: String, payload: String, retain: bool = false) -> void:
 
 
 func _process(delta: float) -> void:
+	# Auto-reconnect after a drop
 	if _ws == null:
+		if _auto_reconnect and _reconnect_timer > 0.0:
+			_reconnect_timer -= delta
+			if _reconnect_timer <= 0.0:
+				print("[SignalingClient] Auto-reconnecting...")
+				connect_to_broker()
 		return
 
 	_ws.poll()
@@ -102,8 +118,11 @@ func _process(delta: float) -> void:
 		if _connected:
 			_connected = false
 			disconnected.emit()
+		_connecting = false
 		_connect_sent = false
 		_ws = null
+		if _auto_reconnect:
+			_reconnect_timer = RECONNECT_DELAY  # Start countdown
 
 	elif state == WebSocketPeer.STATE_CONNECTING:
 		pass  # Still connecting, wait
@@ -232,8 +251,12 @@ func _parse_incoming(data: PackedByteArray) -> void:
 		match packet_type:
 			2:  # CONNACK
 				_connected = true
+				_connecting = false
 				_keepalive_timer = 0.0
 				print("[SignalingClient] CONNACK received — connected to broker!")
+				# Re-subscribe to all stored topics (handles reconnect after drop)
+				for topic in _subscriptions:
+					_ws.put_packet(_build_subscribe_packet(topic, _next_packet_id()))
 				connected.emit()
 
 			3:  # PUBLISH

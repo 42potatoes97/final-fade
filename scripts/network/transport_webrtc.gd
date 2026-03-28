@@ -13,6 +13,16 @@ signal signaling_ready(room_id: String)
 var _cached_offer_payload: String = ""  # Cached for re-publishing
 var _cached_ice: Array = []  # Cache all ICE candidates for re-publishing after SDP exchange
 
+# Retry timers — handles unreliable retained messages on public brokers
+var _answer_received: bool = false   # Host stops re-publishing offer once answer arrives
+var _offer_received: bool = false    # Client stops re-subscribing once offer is processed
+var _offer_retry_timer: float = 0.0
+const OFFER_RETRY_INTERVAL: float = 3.0
+
+# ICE candidate buffer — holds candidates that arrive before remote description is set
+var _remote_description_set: bool = false
+var _pending_ice: Array = []  # [{media, index, sdp}, ...]
+
 const STUN_CONFIG: Dictionary = {
 	"iceServers": [
 		{"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]}
@@ -159,8 +169,13 @@ func _on_signaling_message(topic: String, payload: String) -> void:
 		var type: String = parsed.get("type", "")
 		var sdp: String = parsed.get("sdp", "")
 		if type == "offer" and not sdp.is_empty():
+			if _offer_received:
+				return  # Already processed this offer — ignore duplicate
+			_offer_received = true
 			print("[WebRTC] Received offer, setting remote description (answer auto-generated)...")
 			rtc_peer.set_remote_description(type, sdp)
+			_remote_description_set = true
+			_flush_pending_ice()
 			# Answer is auto-generated via session_description_created signal
 			# Re-publish any cached client ICE after a short delay (answer publishes first)
 			_republish_ice_candidates()
@@ -169,8 +184,11 @@ func _on_signaling_message(topic: String, payload: String) -> void:
 		var type: String = parsed.get("type", "")
 		var sdp: String = parsed.get("sdp", "")
 		if type == "answer" and not sdp.is_empty():
+			_answer_received = true  # Stop re-publishing offer
 			print("[WebRTC] Received answer, connection establishing...")
 			rtc_peer.set_remote_description(type, sdp)
+			_remote_description_set = true
+			_flush_pending_ice()
 			# Re-publish all cached host ICE candidates — client may have missed them
 			_republish_ice_candidates()
 
@@ -180,8 +198,43 @@ func _on_signaling_message(topic: String, payload: String) -> void:
 		var index: int = parsed.get("index", 0)
 		var sdp: String = parsed.get("sdp", "")
 		if not media.is_empty() and not sdp.is_empty():
-			print("[WebRTC] Received ICE candidate")
-			rtc_peer.add_ice_candidate(media, index, sdp)
+			if not _remote_description_set:
+				# Buffer until after remote description is set to avoid WebRTC errors
+				_pending_ice.append({"media": media, "index": index, "sdp": sdp})
+				print("[WebRTC] Buffered ICE candidate (remote description not set yet)")
+			else:
+				print("[WebRTC] Received ICE candidate")
+				rtc_peer.add_ice_candidate(media, index, sdp)
+
+
+func tick(delta: float) -> void:
+	if room_id.is_empty():
+		return
+	_offer_retry_timer += delta
+	if _offer_retry_timer < OFFER_RETRY_INTERVAL:
+		return
+	_offer_retry_timer = 0.0
+
+	if is_host and not _cached_offer_payload.is_empty() and not _answer_received:
+		# Re-publish retained offer until we get an answer — handles brokers that
+		# don't reliably deliver retained messages to late subscribers
+		var topic := "finalfade/room/%s/offer" % room_id
+		signaling.publish(topic, _cached_offer_payload, true)
+		print("[WebRTC] Re-published offer (waiting for answer, retry)")
+	elif not is_host and not _offer_received:
+		# Re-subscribe to offer topic — triggers retained message re-delivery
+		var offer_topic := "finalfade/room/%s/offer" % room_id
+		signaling.subscribe(offer_topic)
+		print("[WebRTC] Re-subscribed to offer topic (waiting for offer, retry)")
+
+
+func _flush_pending_ice() -> void:
+	if _pending_ice.is_empty():
+		return
+	print("[WebRTC] Flushing %d buffered ICE candidates" % _pending_ice.size())
+	for c in _pending_ice:
+		rtc_peer.add_ice_candidate(c["media"], c["index"], c["sdp"])
+	_pending_ice.clear()
 
 
 func _republish_ice_candidates() -> void:
@@ -195,6 +248,9 @@ func _republish_ice_candidates() -> void:
 
 
 func reset() -> void:
+	# Disconnect signaling callback to prevent stale handler on next transport
+	if signaling != null and signaling.message_received.is_connected(_on_signaling_message):
+		signaling.message_received.disconnect(_on_signaling_message)
 	# Clear state so a new host/client can be created for a fresh match
 	if rtc_peer:
 		rtc_peer = null
@@ -203,6 +259,12 @@ func reset() -> void:
 	is_host = false
 	_cached_offer_payload = ""
 	_cached_ice.clear()
+	_pending_ice.clear()
+	_answer_received = false
+	_offer_received = false
+	_offer_retry_timer = 0.0
+	_remote_description_set = false
+	_pending_ice.clear()
 
 
 # --- Utility ---

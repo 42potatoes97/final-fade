@@ -56,6 +56,8 @@ var _publish_topic: String = ""
 var _subscribe_topic: String = ""
 var _subscribed: bool = false
 var _match_pending: bool = false  # True while showing match found dialog
+var _match_room_cb: Callable       # Stored so we can disconnect on cleanup
+var _match_topic: String = ""      # Active match topic for cleanup
 
 
 func init(signaling: SignalingClient) -> void:
@@ -74,6 +76,9 @@ func join_queue(rating: int, region: String, transport: String) -> void:
 
 
 func _join_internal(rating: int, region: String, transport: String, topic: String) -> void:
+	# Reconnect message handler in case this instance was previously left and reused
+	if not _signaling.message_received.is_connected(_on_queue_message):
+		_signaling.message_received.connect(_on_queue_message)
 	var pm = Engine.get_main_loop().root.get_node_or_null("ProfileManager")
 	var pid: String = pm.profile_id if pm else ""
 	var uname: String = pm.username if pm else ""
@@ -119,12 +124,20 @@ func leave_queue() -> void:
 	# Clear retained message
 	if _publish_topic != "" and _signaling.is_connected_to_broker():
 		_signaling.publish(_publish_topic, "", true)
+	# Disconnect message handler so stale queue instances don't ghost-process messages
+	if _signaling.message_received.is_connected(_on_queue_message):
+		_signaling.message_received.disconnect(_on_queue_message)
 	_candidates.clear()
 	_in_queue = false
 	_subscribed = false
 	_match_pending = false
 	_local_entry = {}
 	queue_status_changed.emit("idle")
+
+
+func cleanup_after_match() -> void:
+	# Call this when returning to menu after a match to clear stale state
+	_cleanup_match_connection()
 
 
 func tick(delta: float) -> void:
@@ -249,13 +262,16 @@ func get_local_entry() -> Dictionary:
 func start_match_connection(opponent: Dictionary) -> void:
 	# Called by the UI after both players accept.
 	# Creates a deterministic match topic and initiates WebRTC connection.
+	# Clean up any leftover match callback from a previous match
+	_cleanup_match_connection()
+
 	var local_pid: String = _local_entry.get("profile_id", "")
 	var opp_pid: String = opponent["profile_id"]
 	var sorted_pids: Array = [local_pid, opp_pid]
 	sorted_pids.sort()
-	var match_topic: String = MATCH_TOPIC_PREFIX + sorted_pids[0].left(16) + "_" + sorted_pids[1].left(16)
+	_match_topic = MATCH_TOPIC_PREFIX + sorted_pids[0].left(16) + "_" + sorted_pids[1].left(16)
 
-	print("[MM] Starting connection: host=%s topic=%s" % [str(opponent["is_host"]), match_topic])
+	print("[MM] Starting connection: host=%s topic=%s" % [str(opponent["is_host"]), _match_topic])
 
 	# Generate a unique match nonce to reject stale retained messages
 	var match_nonce: String = "%d_%s" % [int(Time.get_unix_time_from_system()), local_pid.left(8)]
@@ -265,7 +281,8 @@ func start_match_connection(opponent: Dictionary) -> void:
 		# create_host() emits signaling_ready → room_code_ready synchronously
 		NetworkManager.active_transport = "webrtc"
 		# First clear any stale retained room code on the match topic
-		_signaling.publish(match_topic, "", true)
+		_signaling.publish(_match_topic, "", true)
+		var mt: String = _match_topic  # Capture for lambda
 		NetworkManager.room_code_ready.connect(
 			func(code: String):
 				var payload: Dictionary = {
@@ -274,19 +291,19 @@ func start_match_connection(opponent: Dictionary) -> void:
 					"nonce": match_nonce,
 					"ts": int(Time.get_unix_time_from_system()),
 				}
-				_signaling.publish(match_topic, JSON.stringify(payload), true)
+				_signaling.publish(mt, JSON.stringify(payload), true)
 				print("[MM] Room code published: %s (nonce=%s)" % [code, match_nonce])
 		, CONNECT_ONE_SHOT)
 		NetworkManager.host_game()
 	else:
 		# We are the joiner — wait for room code, reject stale retained messages
-		_signaling.subscribe(match_topic)
+		_signaling.subscribe(_match_topic)
 		var _room_joined: bool = false
-		var _room_cb: Callable
-		_room_cb = func(topic: String, payload: String):
+		var mt: String = _match_topic  # Capture for lambda
+		_match_room_cb = func(topic: String, payload: String):
 			if _room_joined:
 				return
-			if topic != match_topic:
+			if topic != mt:
 				return
 			if payload.is_empty():
 				return  # Empty retained cleanup
@@ -304,13 +321,23 @@ func start_match_connection(opponent: Dictionary) -> void:
 				return
 			print("[MM] Received room code: %s" % code)
 			_room_joined = true
-			if _room_cb.is_valid() and _signaling.message_received.is_connected(_room_cb):
-				_signaling.message_received.disconnect(_room_cb)
+			_cleanup_match_connection()
 			NetworkManager.active_transport = "webrtc"
 			NetworkManager.join_with_code(code)
-		_signaling.message_received.connect(_room_cb)
+		_signaling.message_received.connect(_match_room_cb)
 
 	leave_queue()
+
+
+func _cleanup_match_connection() -> void:
+	# Disconnect any lingering match room callback from previous matches
+	if _match_room_cb.is_valid() and _signaling.message_received.is_connected(_match_room_cb):
+		_signaling.message_received.disconnect(_match_room_cb)
+	_match_room_cb = Callable()
+	# Clear retained match topic so next match doesn't see stale room codes
+	if not _match_topic.is_empty() and _signaling.is_connected_to_broker():
+		_signaling.publish(_match_topic, "", true)
+	_match_topic = ""
 
 
 func get_region_latency(region_a: String, region_b: String) -> int:

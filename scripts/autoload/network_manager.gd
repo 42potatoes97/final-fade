@@ -15,6 +15,8 @@ signal transport_changed(transport_name: String)
 signal desync_detected(frame: int)
 signal match_proof_received(proof_data: Dictionary)
 signal match_signature_received(sig_data: String)
+signal rematch_requested
+signal game_started
 
 enum ConnectionState { DISCONNECTED, HOSTING, JOINING, AUTHENTICATING, CONNECTED, IN_GAME }
 
@@ -44,7 +46,7 @@ var _auth_pending: bool = false
 var _enet_transport: TransportENet = null
 var _signaling: SignalingClient = null
 var _webrtc_transport = null  # TransportWebRTC — loaded dynamically
-var _lobby: LobbyDiscovery = null
+var _lobby = null  # FirebaseLobby instance
 var _quality: ConnectionQuality = ConnectionQuality.new()
 var _anticheat_ref = null  # Set by fight_scene, used for hash comparison
 
@@ -76,10 +78,14 @@ func get_signaling() -> SignalingClient:
 	return _signaling
 
 
-func get_lobby() -> LobbyDiscovery:
+const _FirebaseLobbyScript = preload("res://scripts/network/firebase_lobby.gd")
+
+func get_lobby():
 	if _lobby == null:
-		_lobby = LobbyDiscovery.new()
-		_lobby.init(get_signaling())
+		_lobby = _FirebaseLobbyScript.new()
+		_lobby.name = "FirebaseLobby"
+		add_child(_lobby)
+		_lobby.init()
 	return _lobby
 
 
@@ -189,24 +195,42 @@ func host_with_code(port: int = 7000) -> void:
 	host_game(port)
 
 
+var _disconnecting: bool = false  # Prevent re-entrant disconnect_peer()
+
 func disconnect_peer() -> void:
+	if _disconnecting:
+		return
+	_disconnecting = true
 	if multiplayer.multiplayer_peer:
 		multiplayer.multiplayer_peer.close()
 		multiplayer.multiplayer_peer = null
+	var was_connected: bool = connection_state != ConnectionState.DISCONNECTED
 	connection_state = ConnectionState.DISCONNECTED
+	# Clear stale retained WebRTC offer BEFORE is_host and room_id are wiped.
+	# Publishing an empty retained message evicts the broker's stored offer so
+	# the next client to subscribe doesn't receive a dead offer.
+	if _webrtc_transport != null and _webrtc_transport.is_host:
+		var _rid: String = _webrtc_transport.room_id
+		if not _rid.is_empty() and _signaling != null and _signaling.is_connected_to_broker():
+			_signaling.publish("finalfade/room/%s/offer" % _rid, "", true)
+	is_host = false
 	remote_peer_id = -1
 	_sent_inputs.clear()
 	_session_key = PackedByteArray()
 	_packet_key = PackedByteArray()
 	_auth_pending = false
-	# Reset WebRTC transport for next match
+	# Destroy WebRTC transport — reset disconnects signaling callback,
+	# then null drops the RefCounted reference so it gets freed
 	if _webrtc_transport != null:
 		_webrtc_transport.reset()
+		_webrtc_transport = null
 	# Remove lobby listing
 	if _lobby:
 		_lobby.remove_room()
 	_anticheat_ref = null
-	disconnected.emit()
+	_disconnecting = false
+	if was_connected:
+		disconnected.emit()
 
 
 func start_game() -> void:
@@ -378,11 +402,17 @@ func _rpc_auth_data(data: PackedByteArray) -> void:
 @rpc("any_peer", "reliable")
 func _rpc_sync_start() -> void:
 	connection_state = ConnectionState.IN_GAME
+	game_started.emit()
+
+
+func send_rematch_request() -> void:
+	if remote_peer_id > 0:
+		_rpc_rematch_request.rpc_id(remote_peer_id)
 
 
 @rpc("any_peer", "reliable")
 func _rpc_rematch_request() -> void:
-	pass
+	rematch_requested.emit()
 
 
 # --- Menu Sync (side select, char select, stage select) ---
@@ -434,9 +464,33 @@ func _rpc_match_signature(data: PackedByteArray) -> void:
 # --- Ping / Connection Quality ---
 
 func send_ping() -> void:
-	if remote_peer_id > 0 and multiplayer.multiplayer_peer:
-		var ping_data: PackedByteArray = _quality.create_ping_packet()
-		multiplayer.multiplayer_peer.put_packet(ping_data)
+	if remote_peer_id <= 0 or multiplayer.multiplayer_peer == null:
+		return
+	var d: Dictionary = _quality.create_ping_data()
+	_rpc_ping.rpc_id(remote_peer_id, d["seq"], d["timestamp"])
+
+
+@rpc("any_peer", "unreliable")
+func _rpc_ping(seq: int, timestamp_ms: int) -> void:
+	if remote_peer_id > 0:
+		_rpc_pong.rpc_id(remote_peer_id, seq, timestamp_ms)
+
+
+@rpc("any_peer", "unreliable")
+func _rpc_pong(seq: int, timestamp_ms: int) -> void:
+	_quality.process_pong_data(seq, timestamp_ms)
+
+
+func send_input_delay_sync(delay: int) -> void:
+	if remote_peer_id > 0:
+		_rpc_set_input_delay.rpc_id(remote_peer_id, delay)
+
+
+@rpc("any_peer", "reliable")
+func _rpc_set_input_delay(delay: int) -> void:
+	input_delay = delay
+	if RollbackManager.is_active:
+		RollbackManager.input_delay = delay
 
 
 func get_quality() -> ConnectionQuality:
@@ -465,11 +519,10 @@ func _on_multiplayer_peer_connected(id: int) -> void:
 
 func _on_multiplayer_peer_disconnected(id: int) -> void:
 	print("[NetworkManager] Multiplayer peer disconnected! id=%d" % id)
-	# During IN_GAME, don't reset — WebRTC may reconnect via ICE restart
-	if connection_state == ConnectionState.IN_GAME:
-		print("[NetworkManager] Peer lost during game — keeping state for reconnection")
-		return
-	disconnected.emit()
+	remote_peer_id = -1
+	if connection_state != ConnectionState.DISCONNECTED:
+		connection_state = ConnectionState.DISCONNECTED
+		disconnected.emit()
 
 
 func _on_multiplayer_connected_to_server() -> void:
@@ -502,8 +555,9 @@ func _on_transport_peer_connected(id: int) -> void:
 
 func _on_transport_peer_disconnected(_id: int) -> void:
 	remote_peer_id = -1
-	connection_state = ConnectionState.DISCONNECTED
-	disconnected.emit()
+	if connection_state != ConnectionState.DISCONNECTED:
+		connection_state = ConnectionState.DISCONNECTED
+		disconnected.emit()
 
 
 func _on_transport_connected() -> void:
@@ -544,6 +598,10 @@ func _init_webrtc_transport() -> void:
 # --- Packet Processing ---
 
 func _process(delta: float) -> void:
+	# Tick WebRTC transport for offer/answer retry loop
+	if _webrtc_transport != null and (connection_state == ConnectionState.HOSTING or connection_state == ConnectionState.JOINING):
+		_webrtc_transport.tick(delta)
+
 	# Connection timeout — only for ENet JOINING (WebRTC needs more time for ICE)
 	if connection_state == ConnectionState.JOINING and active_transport == "enet":
 		_connect_timer += delta

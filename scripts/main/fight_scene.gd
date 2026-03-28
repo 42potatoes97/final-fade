@@ -21,6 +21,17 @@ var _leaderboard: LeaderboardManager = null
 var _pending_proof: Dictionary = {}
 var _is_ranked: bool = false
 
+# Online rematch sync
+var _rematch_btn: Button = null
+var _local_rematch_ready: bool = false
+var _remote_rematch_ready: bool = false
+var _opponent_disconnected: bool = false
+
+# Netcode debug HUD (online mode only, F3 to toggle)
+var _debug_hud: CanvasLayer = null
+var _debug_label: Label = null
+var _debug_hud_visible: bool = false
+
 # Spawn positions
 const P1_SPAWN = Vector3(-3, 0, 0)
 const P2_SPAWN = Vector3(3, 0, 0)
@@ -115,6 +126,15 @@ func _ready() -> void:
 		NetworkManager.start_game()
 		RollbackManager.input_delay = NetworkManager.input_delay
 		RollbackManager.start(fighter1, fighter2)
+		_build_debug_hud()
+		# Online rematch sync
+		if NetworkManager.rematch_requested.is_connected(_on_remote_rematch_requested):
+			NetworkManager.rematch_requested.disconnect(_on_remote_rematch_requested)
+		NetworkManager.rematch_requested.connect(_on_remote_rematch_requested)
+		# Opponent disconnect handler — show message and return to menu
+		if NetworkManager.disconnected.is_connected(_on_opponent_disconnected):
+			NetworkManager.disconnected.disconnect(_on_opponent_disconnected)
+		NetworkManager.disconnected.connect(_on_opponent_disconnected, CONNECT_ONE_SHOT)
 
 	# Ranked match setup
 	if GameManager.online_mode and GameManager.get("ranked_mode"):
@@ -163,6 +183,42 @@ func _process(delta: float) -> void:
 				# Start next round
 				GameManager.start_next_round()
 				_reset_positions()
+	# Update debug HUD if visible
+	if _debug_hud_visible and _debug_label != null:
+		_update_debug_hud()
+
+
+func _build_debug_hud() -> void:
+	_debug_hud = CanvasLayer.new()
+	_debug_hud.layer = 30  # Above round overlay (layer 20)
+	add_child(_debug_hud)
+
+	var bg := ColorRect.new()
+	bg.color = Color(0.0, 0.0, 0.0, 0.6)
+	bg.custom_minimum_size = Vector2(320, 130)
+	bg.position = Vector2(10, 10)
+	_debug_hud.add_child(bg)
+
+	_debug_label = Label.new()
+	_debug_label.position = Vector2(18, 14)
+	_debug_label.add_theme_font_size_override("font_size", 14)
+	_debug_label.add_theme_color_override("font_color", Color(0.85, 1.0, 0.65))
+	_debug_hud.add_child(_debug_label)
+
+	_debug_hud.visible = false
+
+
+func _update_debug_hud() -> void:
+	var quality: ConnectionQuality = NetworkManager.get_quality()
+	var rm := RollbackManager
+	var remote_lag: int = rm.current_frame - rm.last_confirmed_remote_frame
+	_debug_label.text = (
+		"Frame: %d\n" % rm.current_frame
+		+ "Ping: %.0f ms   Jitter: %.0f ms\n" % [quality.current_ping_ms, quality.jitter_ms]
+		+ "Delay: %d fr   Max rollback: %d fr\n" % [rm.input_delay, rm.max_rollback_frames]
+		+ "Rollbacks: %d   Stalls: %d\n" % [rm.rollback_count, rm.stall_count]
+		+ "Remote lag: %d fr   Loss: %.0f%%\n" % [remote_lag, quality.packet_loss_pct]
+	)
 
 
 func _build_round_overlay() -> void:
@@ -239,12 +295,15 @@ func _show_match_end_screen() -> void:
 	vbox.add_child(spacer)
 
 	# Rematch button
-	var rematch_btn = Button.new()
-	rematch_btn.text = "REMATCH"
-	rematch_btn.custom_minimum_size = Vector2(200, 50)
-	rematch_btn.add_theme_font_size_override("font_size", 24)
-	rematch_btn.pressed.connect(_on_rematch)
-	vbox.add_child(rematch_btn)
+	_rematch_btn = Button.new()
+	_rematch_btn.text = "REMATCH"
+	_rematch_btn.custom_minimum_size = Vector2(200, 50)
+	_rematch_btn.add_theme_font_size_override("font_size", 24)
+	_rematch_btn.pressed.connect(_on_rematch)
+	# Show "opponent wants rematch" state if they already pressed
+	if _remote_rematch_ready:
+		_rematch_btn.text = "REMATCH ★"
+	vbox.add_child(_rematch_btn)
 
 	# Main menu button
 	var menu_btn = Button.new()
@@ -256,15 +315,80 @@ func _show_match_end_screen() -> void:
 
 
 func _on_rematch() -> void:
+	if GameManager.online_mode:
+		_local_rematch_ready = true
+		NetworkManager.send_rematch_request()
+		if _rematch_btn:
+			_rematch_btn.text = "Waiting for opponent…"
+			_rematch_btn.disabled = true
+		_try_start_rematch()
+		return
+	# Offline: proceed immediately
+	_do_rematch()
+
+
+func _on_remote_rematch_requested() -> void:
+	_remote_rematch_ready = true
+	if _rematch_btn and not _local_rematch_ready:
+		_rematch_btn.text = "REMATCH ★"
+	_try_start_rematch()
+
+
+func _try_start_rematch() -> void:
+	if _local_rematch_ready and _remote_rematch_ready:
+		_local_rematch_ready = false
+		_remote_rematch_ready = false
+		_do_rematch()
+
+
+func _do_rematch() -> void:
 	if match_end_screen:
 		match_end_screen.queue_free()
 		match_end_screen = null
+	_rematch_btn = null
+	_opponent_disconnected = false
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	GameManager.reset_match()
 	_reset_positions()
+	# Re-arm disconnect handler for the new match
+	if GameManager.online_mode:
+		if NetworkManager.disconnected.is_connected(_on_opponent_disconnected):
+			NetworkManager.disconnected.disconnect(_on_opponent_disconnected)
+		NetworkManager.disconnected.connect(_on_opponent_disconnected, CONNECT_ONE_SHOT)
+
+
+func _on_opponent_disconnected() -> void:
+	if not GameManager.online_mode or _opponent_disconnected:
+		return
+	_opponent_disconnected = true
+	RollbackManager.stop()
+	# Clean up network transport so next match starts fresh.
+	# Always call disconnect_peer() — even if state is already DISCONNECTED,
+	# we still need to destroy the WebRTC transport (reset + null).
+	NetworkManager.disconnect_peer()
+	# Show overlay message
+	var canvas := CanvasLayer.new()
+	var lbl := Label.new()
+	lbl.text = "Opponent disconnected"
+	lbl.add_theme_font_size_override("font_size", 36)
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lbl.set_anchors_preset(Control.PRESET_FULL_RECT)
+	lbl.modulate = Color(1.0, 0.4, 0.4)
+	canvas.add_child(lbl)
+	add_child(canvas)
+	get_tree().create_timer(2.5).timeout.connect(func():
+		if is_inside_tree():
+			GameManager.reset_session()
+			get_tree().change_scene_to_file("res://scenes/ui/main_menu.tscn")
+	)
 
 
 func _on_main_menu() -> void:
+	# Disconnect opponent handler first so disconnect_peer() doesn't trigger it
+	if GameManager.online_mode and NetworkManager.disconnected.is_connected(_on_opponent_disconnected):
+		NetworkManager.disconnected.disconnect(_on_opponent_disconnected)
+	NetworkManager.disconnect_peer()
 	GameManager.reset_session()
 	get_tree().change_scene_to_file("res://scenes/ui/main_menu.tscn")
 
@@ -452,6 +576,12 @@ func _exit_tree() -> void:
 	# Clean up ranked references
 	RollbackManager.clear_ranked()
 	NetworkManager._anticheat_ref = null
+	# Disconnect opponent handler so disconnect_peer() below doesn't trigger it
+	if GameManager.online_mode and NetworkManager.disconnected.is_connected(_on_opponent_disconnected):
+		NetworkManager.disconnected.disconnect(_on_opponent_disconnected)
+	# Disconnect from peer so NetworkManager is clean for the next match
+	if NetworkManager.connection_state == NetworkManager.ConnectionState.IN_GAME:
+		NetworkManager.disconnect_peer()
 
 
 func _apply_ai_difficulty(ai, player_id: int) -> void:
@@ -510,6 +640,13 @@ func _get_all_mesh_instances(node: Node) -> Array:
 
 
 func _input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed:
+		if event.keycode == KEY_F3 and GameManager.online_mode:
+			_debug_hud_visible = not _debug_hud_visible
+			if _debug_hud != null:
+				_debug_hud.visible = _debug_hud_visible
+			get_viewport().set_input_as_handled()
+			return
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
 		get_viewport().set_input_as_handled()
 		if match_end_screen:
